@@ -1,0 +1,52 @@
+[package]
+name = "certval-security-framework"
+version = "0.1.0"
+description = """
+Security.framework crypto provider for certval. Performs certificate signature verification with
+Apple's platform cryptography, so certification path validation on macOS and iOS can use the
+operating system's validated cryptographic module rather than an in-process software implementation.
+"""
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/carl-wallace/certval-security-framework"
+categories = ["cryptography"]
+keywords = ["x509", "certval", "macos", "ios", "security-framework"]
+readme = "README.md"
+build = "build.rs"
+edition = "2021"
+rust-version = "1.88"
+
+[features]
+default = []
+# Post-quantum signatures. On an Apple target, compiles the CryptoKit shim in swift/ (which needs
+# Xcode's Swift toolchain) so ML-DSA-65 and ML-DSA-87 are verified by CryptoKit on macOS and iOS
+# 26 and later. Also enables certval's software ML-DSA and SLH-DSA, which answer what CryptoKit
+# does not (ML-DSA-44, SLH-DSA, and ML-DSA on an older OS).
+pqc = ["certval/pqc"]
+
+[dependencies]
+certval = { version = "0.2.0-rc.1", default-features = false, features = ["std", "rsa"] }
+
+const-oid = { version = "0.10.2", features = ["db"] }
+der = { version = "0.8.1", features = ["alloc", "derive", "oid"] }
+spki = "0.8.0"
+
+log = "0.4.33"
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+core-foundation = "0.10.1"
+security-framework = { version = "3.7.0", default-features = false }
+security-framework-sys = { version = "2.17.0", default-features = false }
+
+[dev-dependencies]
+x509-cert = { version = "0.3.0", features = ["hazmat"] }
+p256 = { version = "0.14.0", features = ["ecdsa"] }
+p384 = { version = "0.14.0", features = ["ecdsa"] }
+p521 = { version = "0.14.0", features = ["ecdsa"] }
+sha2 = "0.11.0"
+signature = "3.0.0"
+
+# Uncomment while developing certval and this crate together: it redirects the crates.io dependency
+# above to the local checkout, so edits take effect without a publish. Leave it commented on anything
+# that is committed, or the build depends on a path that only exists here.
+# [patch.crates-io]
+# certval = { path = "../rust-pki/certval" }

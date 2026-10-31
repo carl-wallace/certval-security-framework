@@ -1,0 +1,118 @@
+name: certval-security-framework
+
+on:
+  pull_request:
+  push:
+    branches: main
+  # Manual re-runs via `gh workflow run ci.yml` (available once this file is
+  # on the default branch).
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: certval-security-framework
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: "-Dwarnings"
+
+# Cancels CI jobs when new commits are pushed to a PR branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # The macOS jobs name macos-26 rather than macos-latest because the pqc feature compiles a Swift
+  # shim against CryptoKit's ML-DSA types, which first appear in the macOS 26 SDK; an older Xcode
+  # fails to build it. The test job also needs a macOS 26 runtime for CryptoKit to answer.
+  build:
+    runs-on: macos-26
+    strategy:
+      matrix:
+        rust:
+          - 1.88.0 # MSRV, matching certval
+          - stable
+    steps:
+      # certval comes from crates.io, so no sibling checkout is needed here.
+      - uses: actions/checkout@v7
+        with:
+          path: certval-security-framework
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          targets: aarch64-apple-ios
+      - run: cargo build --all-targets
+      - run: cargo build --all-targets --all-features
+      # Security.framework is the same API on iOS, so the provider is expected to compile there,
+      # shim included. Built rather than tested: running it needs a simulator or a device.
+      - run: cargo build --target aarch64-apple-ios --features pqc
+
+  # The crate is empty off Apple's platforms, so that a multi-platform workspace can depend on it
+  # unconditionally. This keeps that true.
+  build-elsewhere:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-security-framework
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --all-targets
+
+  # Lints run on stable only, deliberately not across the build matrix: clippy's diagnostics differ
+  # between toolchains, so linting against the MSRV pin reports on a compiler nobody develops with.
+  # The pre-commit hook runs the same commands locally so they fail before a push rather than in
+  # CI. It is an early warning, not a replacement for these jobs.
+  lint:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-security-framework
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Not installed by default.
+          components: clippy
+      - run: cargo clippy --all-targets
+      - run: cargo clippy --all-targets --all-features
+
+  # A job of its own so it can be a required check without making clippy one: each Rust release
+  # adds lints, and a required clippy would fail unrelated pull requests.
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-security-framework
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Not installed by default.
+          components: rustfmt
+      - run: cargo fmt --check
+
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-security-framework
+      # The certificate collections live in rust-pki's test data and are pointed at rather than
+      # copied, which is what the environment variables below are for. Pinned to the commit the
+      # certval release in Cargo.toml was published from (certval-v0.2.0-rc.1), so the certificates
+      # and the library under test stay in lockstep; bump both together.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/rust-pki
+          ref: 93104f49a8083f1e527e3b4e830581b917674e2f
+          path: rust-pki
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run the unit, signature and collection tests
+        env:
+          CERTVAL_SF_RSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_2048/certs
+          CERTVAL_SF_ECDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_p256/certs
+          CERTVAL_SF_PSS_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/rsapss
+          # ML-DSA-44 must fall through to software; CryptoKit must answer 65 and 87.
+          CERTVAL_SF_MLDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_ml_dsa_44/certs:${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_ml_dsa_65/certs:${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_ml_dsa_87/certs
+        # --nocapture so the per-family tallies land in the log: they are the only way to see how
+        # much the platform answered, as opposed to software.
+        run: cargo test --features pqc -- --nocapture
