@@ -1,6 +1,6 @@
 [package]
 name = "certval-security-framework"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 description = """
 Security.framework crypto provider for certval. Performs certificate signature verification with
 Apple's platform cryptography, so certification path validation on macOS and iOS can use the
@@ -14,6 +14,7 @@ readme = "README.md"
 build = "build.rs"
 edition = "2021"
 rust-version = "1.88"
+include = ["src/**/*.rs", "README.md", "CHANGELOG.md", "LICENSE-APACHE", "LICENSE-MIT", "build.rs", "swift/**/*.swift"]
 
 [features]
 default = []
@@ -44,6 +45,13 @@ p384 = { version = "0.14.0", features = ["ecdsa"] }
 p521 = { version = "0.14.0", features = ["ecdsa"] }
 sha2 = "0.11.0"
 signature = "3.0.0"
+
+[package.metadata.docs.rs]
+# The provider exists only on Apple targets. pqc stays off: docs.rs has no Swift toolchain to
+# build the CryptoKit shim with.
+default-target = "aarch64-apple-darwin"
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+rustdoc-args = ["--cfg", "docsrs"]
 
 # Uncomment while developing certval and this crate together: it redirects the crates.io dependency
 # above to the local checkout, so edits take effect without a publish. Leave it commented on anything

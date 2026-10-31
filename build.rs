@@ -12,9 +12,12 @@ fn main() {
     println!("cargo:rerun-if-changed={SHIM}");
     println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
     println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
 
+    // docs.rs has no Swift toolchain. Rustdoc never links, so the shim is not needed there.
     if env::var_os("CARGO_FEATURE_PQC").is_none()
         || env::var("CARGO_CFG_TARGET_VENDOR").as_deref() != Ok("apple")
+        || env::var_os("DOCS_RS").is_some()
     {
         return;
     }

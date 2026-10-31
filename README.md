@@ -125,8 +125,7 @@ Run on macOS 26.6 (Apple silicon) against rust-pki's PKITS collections: Security
 all 389 RSA and 388 ECDSA verifications that software accepted, with no disagreements in either
 interface. With `pqc`, CryptoKit answered 391 of the 394 ML-DSA-65 and ML-DSA-87 verifications
 software accepted in each collection, with no disagreements; the other 3 in each are signed with
-ML-DSA-44, which CryptoKit lacks, and went to software. ML-DSA-44 went entirely to software. Builds for iOS; not yet run there. Not yet published to
-crates.io.
+ML-DSA-44, which CryptoKit lacks, and went to software. ML-DSA-44 went entirely to software. Builds for iOS; not yet run there.
 
 Whether Apple's corecrypto validation covers a given OS release is a question for NIST's CMVP list,
 not for this crate.
