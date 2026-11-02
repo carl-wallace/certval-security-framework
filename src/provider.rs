@@ -70,16 +70,25 @@ impl SecurityFrameworkCrypto {
 
         match key.verify_signature(algorithm, data, signature) {
             // Security.framework verified the signature.
-            Ok(true) => Ok(()),
+            Ok(true) => {
+                debug!("Security.framework verified a signature");
+                Ok(())
+            }
 
             // Security.framework reached a verdict and it was negative. The environment treats
             // this as final and consults no other implementation.
-            Ok(false) => Err(certval::Error::PathValidation(
-                PathValidationStatus::SignatureVerificationFailure,
-            )),
-            Err(e) if e.code() == ERR_SEC_VERIFY_FAILED => Err(certval::Error::PathValidation(
-                PathValidationStatus::SignatureVerificationFailure,
-            )),
+            Ok(false) => {
+                debug!("Security.framework rejected a signature");
+                Err(certval::Error::PathValidation(
+                    PathValidationStatus::SignatureVerificationFailure,
+                ))
+            }
+            Err(e) if e.code() == ERR_SEC_VERIFY_FAILED => {
+                debug!("Security.framework rejected a signature");
+                Err(certval::Error::PathValidation(
+                    PathValidationStatus::SignatureVerificationFailure,
+                ))
+            }
 
             // Any other error is Security.framework declining the request (a digest of the wrong
             // length, or a key it cannot use with the algorithm) rather than judging the
@@ -112,10 +121,16 @@ impl VerifySignatureMessage for SecurityFrameworkCrypto {
                 message_to_verify,
                 signature,
             ) {
-                Verdict::Valid => Ok(()),
-                Verdict::Invalid => Err(certval::Error::PathValidation(
-                    PathValidationStatus::SignatureVerificationFailure,
-                )),
+                Verdict::Valid => {
+                    debug!("Security.framework verified an ML-DSA signature");
+                    Ok(())
+                }
+                Verdict::Invalid => {
+                    debug!("Security.framework rejected an ML-DSA signature");
+                    Err(certval::Error::PathValidation(
+                        PathValidationStatus::SignatureVerificationFailure,
+                    ))
+                }
                 Verdict::Declined => Err(certval::Error::Unrecognized),
             };
         }
