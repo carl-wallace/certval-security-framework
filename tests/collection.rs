@@ -70,6 +70,8 @@ fn run_collection(family: &str, dir: &str) -> usize {
         digest.disagreements, digest.pairs
     );
 
+    assert_compared(family, &message, &digest);
+
     message.module_answered + digest.module_answered
 }
 
@@ -94,6 +96,10 @@ fn pss_platform_agrees_with_software() {
 /// collections, separated as `PATH` is.
 #[test]
 fn ml_dsa_is_answered_where_cryptokit_has_it() {
+    if !cfg!(feature = "pqc") {
+        println!("ML-DSA: skipped, built without pqc, so certval's software has no verdict to compare against");
+        return;
+    }
     let Some(dirs) = env(MLDSA_CERTS) else {
         println!("ML-DSA: skipped, {MLDSA_CERTS} is not set");
         return;

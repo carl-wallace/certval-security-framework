@@ -6,7 +6,7 @@ use certval::{
     PathValidationStatus, PkiEnvironment, VerifySignatureDigest, VerifySignatureMessage,
 };
 use der::asn1::BitString;
-use log::debug;
+use log::{debug, trace};
 use security_framework_sys::key::Algorithm;
 use spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
 
@@ -71,20 +71,20 @@ impl SecurityFrameworkCrypto {
         match key.verify_signature(algorithm, data, signature) {
             // Security.framework verified the signature.
             Ok(true) => {
-                debug!("Security.framework verified a signature");
+                trace!("Security.framework verified a signature");
                 Ok(())
             }
 
             // Security.framework reached a verdict and it was negative. The environment treats
             // this as final and consults no other implementation.
             Ok(false) => {
-                debug!("Security.framework rejected a signature");
+                trace!("Security.framework rejected a signature");
                 Err(certval::Error::PathValidation(
                     PathValidationStatus::SignatureVerificationFailure,
                 ))
             }
             Err(e) if e.code() == ERR_SEC_VERIFY_FAILED => {
-                debug!("Security.framework rejected a signature");
+                trace!("Security.framework rejected a signature");
                 Err(certval::Error::PathValidation(
                     PathValidationStatus::SignatureVerificationFailure,
                 ))
@@ -122,11 +122,11 @@ impl VerifySignatureMessage for SecurityFrameworkCrypto {
                 signature,
             ) {
                 Verdict::Valid => {
-                    debug!("Security.framework verified an ML-DSA signature");
+                    trace!("Security.framework verified an ML-DSA signature");
                     Ok(())
                 }
                 Verdict::Invalid => {
-                    debug!("Security.framework rejected an ML-DSA signature");
+                    trace!("Security.framework rejected an ML-DSA signature");
                     Err(certval::Error::PathValidation(
                         PathValidationStatus::SignatureVerificationFailure,
                     ))
