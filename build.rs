@@ -6,10 +6,12 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SHIM: &str = "swift/MLDSAShim.swift";
+const SHIMS: [&str; 2] = ["swift/MLDSAShim.swift", "swift/MLKEMShim.swift"];
 
 fn main() {
-    println!("cargo:rerun-if-changed={SHIM}");
+    for shim in SHIMS {
+        println!("cargo:rerun-if-changed={shim}");
+    }
     println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
     println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
     println!("cargo:rerun-if-env-changed=DOCS_RS");
@@ -40,10 +42,14 @@ fn main() {
         .args(["-sdk", &sdk])
         .arg("-o")
         .arg(&library)
-        .arg(SHIM)
+        .args(SHIMS)
         .status()
         .unwrap_or_else(|e| panic!("could not run {swiftc}: {e}"));
-    assert!(status.success(), "swiftc failed to compile {SHIM}");
+    assert!(
+        status.success(),
+        "swiftc failed to compile {}",
+        SHIMS.join(" and ")
+    );
 
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=certval_sf_shim");

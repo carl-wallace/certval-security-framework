@@ -55,6 +55,33 @@ impl SecurityFrameworkCrypto {
         }
     }
 
+    /// Reports whether ML-KEM is performed by CryptoKit, for encryption to an ML-KEM recipient and
+    /// by `CryptoKitRecipientKey`: true only when the crate was
+    /// built with the `cms` and `pqc` features and the running OS is macOS or iOS 26 or later.
+    pub fn ml_kem_available() -> bool {
+        #[cfg(all(feature = "cms", feature = "pqc"))]
+        {
+            crate::mlkem::available()
+        }
+        #[cfg(not(all(feature = "cms", feature = "pqc")))]
+        {
+            false
+        }
+    }
+
+    /// Reports whether the device has a Secure Enclave that CryptoKit can use for ML-KEM keys: true
+    /// only when the crate was built with the `cms` and `pqc` features and the device has one.
+    pub fn secure_enclave_available() -> bool {
+        #[cfg(all(feature = "cms", feature = "pqc"))]
+        {
+            crate::mlkem::secure_enclave_available()
+        }
+        #[cfg(not(all(feature = "cms", feature = "pqc")))]
+        {
+            false
+        }
+    }
+
     /// Verifies `data` against `signature` with `algorithm`, reporting the outcome in the terms
     /// certval's interfaces are defined in.
     fn verify_with(

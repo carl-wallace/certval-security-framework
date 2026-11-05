@@ -9,6 +9,14 @@
 //!
 //! Signing: messages a `SecurityFrameworkSigningKey` signs are verified by software, and messages
 //! software signs are verified, and hashed, by this provider alone.
+//!
+//! Importing: the PKCS #8 software holds, imported by `import_pkcs8`, decrypts and signs as the key
+//! Security.framework generated does.
+//!
+//! ML-KEM, with `pqc`: messages software builds to ML-KEM-768 and ML-KEM-1024 recipients are
+//! decrypted by a `CryptoKitRecipientKey`, over a seed and, where the device has one, in the Secure
+//! Enclave, and messages this provider builds to them are decrypted by software. ML-KEM-512 is
+//! declined.
 
 #![cfg(all(target_vendor = "apple", feature = "cms"))]
 
@@ -24,7 +32,7 @@ use certval_cms::{
     SignerPolicy, SigningCredential, SoftwareRecipientKey, SoftwareSigningKey,
 };
 use certval_security_framework::{
-    KeychainIdentities, SecurityFrameworkCrypto, SecurityFrameworkRecipientKey,
+    import_pkcs8, KeychainIdentities, SecurityFrameworkCrypto, SecurityFrameworkRecipientKey,
     SecurityFrameworkSigningKey,
 };
 use cms::{content_info::ContentInfo, enveloped_data::RecipientIdentifier};
@@ -419,4 +427,251 @@ fn a_keychain_search_for_an_absent_key_finds_nothing() {
         "{:?}",
         found.map(|f| f.is_some())
     );
+}
+
+/// Listing the keychain's identities succeeds, whatever it holds.
+#[test]
+fn the_keychain_lists_its_identities() {
+    let certificates = KeychainIdentities::new().certificates().unwrap();
+    println!("the keychain holds {} identities", certificates.len());
+}
+
+// ---- importing
+
+/// A PKCS #8 key imported by `import_pkcs8` decrypts what software encrypts and signs what software
+/// verifies.
+fn imported_key_decrypts_and_signs(key: &Key, name: &str) {
+    let (software, platform) = (software(), security_framework());
+    let (recipient, signer) = import_pkcs8(key.cert.clone(), &key.pkcs8)
+        .unwrap_or_else(|e| panic!("{name}: importing: {e}"));
+    let r = if key
+        .cert
+        .tbs_certificate()
+        .subject_public_key_info()
+        .algorithm
+        .oid
+        == const_oid::db::rfc5912::RSA_ENCRYPTION
+    {
+        let r = KeyTransRecipient::from_certificate(
+            &software,
+            &key.cert,
+            None,
+            KeyTransportAlgorithm::RsaOaepSha256,
+        )
+        .unwrap();
+        envelop(&software, ContentEncryptionAlgorithm::Aes256Cbc, r)
+    } else {
+        let r = KeyAgreeRecipient::from_certificate(
+            &software,
+            &key.cert,
+            None,
+            KeyAgreementAlgorithm::EcdhSha256,
+            KeyWrapAlgorithm::Aes256,
+            None,
+        )
+        .unwrap();
+        envelop(&software, ContentEncryptionAlgorithm::Aes256Cbc, r)
+    };
+    assert_decrypts(&platform, &r, &recipient, name);
+    assert_signs_across(&platform, &software, &signer, |s| s, name);
+}
+
+#[test]
+fn imported_keys_decrypt_and_sign() {
+    imported_key_decrypts_and_signs(&Key::rsa(), "RSA");
+    imported_key_decrypts_and_signs(&ec_key!(p256, 256), "P-256");
+    imported_key_decrypts_and_signs(&ec_key!(p384, 384), "P-384");
+    imported_key_decrypts_and_signs(&ec_key!(p521, 521), "P-521");
+}
+
+#[test]
+fn a_key_that_is_not_the_certificates_is_refused() {
+    let (a, b) = (ec_key!(p256, 256), ec_key!(p256, 256));
+    assert!(matches!(
+        import_pkcs8(a.cert, &b.pkcs8),
+        Err(Error::InvalidInput(_))
+    ));
+    let rsa = Key::rsa();
+    assert!(matches!(
+        import_pkcs8(rsa.cert, &b.pkcs8),
+        Err(Error::InvalidInput(_))
+    ));
+}
+
+// ---- ML-KEM through CryptoKit
+
+#[cfg(feature = "pqc")]
+mod cryptokit_ml_kem {
+    use super::*;
+    use certval_cms::{KdfAlgorithm, KemRecipient};
+    use certval_security_framework::CryptoKitRecipientKey;
+    use const_oid::db::fips203::{ID_ALG_ML_KEM_1024, ID_ALG_ML_KEM_768};
+    use ml_kem::pkcs8::{EncodePrivateKey, EncodePublicKey};
+    use ml_kem::{Kem, MlKem1024, MlKem512, MlKem768};
+
+    const KDFS: [KdfAlgorithm; 3] = [
+        KdfAlgorithm::HkdfSha256,
+        KdfAlgorithm::HkdfSha384,
+        KdfAlgorithm::HkdfSha512,
+    ];
+
+    /// This provider, with its ML-KEM encryption registered as well.
+    fn security_framework_with_kem() -> CmsEnvironment {
+        let mut env = security_framework();
+        env.add_encrypt_kem_callback(SecurityFrameworkCrypto::new());
+        env
+    }
+
+    /// A software ML-KEM key as PKCS #8, and its certificate.
+    macro_rules! software_key {
+        ($kem:ty) => {{
+            let (dk, ek) = <$kem as Kem>::generate_keypair_from_rng(&mut rng());
+            let cert = certificate(ek.to_public_key_der().unwrap().as_bytes());
+            (cert, dk.to_pkcs8_der().unwrap().as_bytes().to_vec())
+        }};
+    }
+
+    fn kem_envelop(
+        env: &CmsEnvironment,
+        cert: &Certificate,
+        kdf: KdfAlgorithm,
+        wrap: KeyWrapAlgorithm,
+        ukm: Option<Vec<u8>>,
+    ) -> ContentInfo {
+        let r = KemRecipient::from_certificate(env, cert, None, kdf, wrap, ukm).unwrap();
+        envelop(env, ContentEncryptionAlgorithm::Aes256Cbc, r)
+    }
+
+    /// Both directions, every KDF and wrap, with and without user keying material: software
+    /// encrypts and `credential` decrypts under this provider alone, and this provider encrypts
+    /// and `software_key` decrypts under software.
+    fn crosses(
+        cert: &Certificate,
+        credential: &dyn RecipientCredential,
+        software_key: Option<&dyn RecipientCredential>,
+        name: &str,
+    ) {
+        let (software, platform) = (software(), security_framework_with_kem());
+        for kdf in KDFS {
+            for wrap in WRAPS {
+                for ukm in [None, Some(b"user keying material".to_vec())] {
+                    let case = format!("{name} {kdf:?} {wrap:?} ukm={}", ukm.is_some());
+                    let ci = kem_envelop(&software, cert, kdf, wrap, ukm.clone());
+                    assert_decrypts(
+                        &platform,
+                        &ci,
+                        credential,
+                        &format!("software to CryptoKit, {case}"),
+                    );
+
+                    let ci = kem_envelop(&platform, cert, kdf, wrap, ukm);
+                    assert_decrypts(
+                        &platform,
+                        &ci,
+                        credential,
+                        &format!("CryptoKit to CryptoKit, {case}"),
+                    );
+                    if let Some(software_key) = software_key {
+                        assert_decrypts(
+                            &software,
+                            &ci,
+                            software_key,
+                            &format!("CryptoKit to software, {case}"),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ml_kem_768_and_1024_from_pkcs8() {
+        if !SecurityFrameworkCrypto::ml_kem_available() {
+            println!("ML-KEM: skipped, the running OS has no CryptoKit ML-KEM");
+            return;
+        }
+        for (cert, pkcs8, name) in [
+            {
+                let (c, k) = software_key!(MlKem768);
+                (c, k, "ML-KEM-768")
+            },
+            {
+                let (c, k) = software_key!(MlKem1024);
+                (c, k, "ML-KEM-1024")
+            },
+        ] {
+            let credential = CryptoKitRecipientKey::from_pkcs8_der(cert.clone(), &pkcs8)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let software_key = SoftwareRecipientKey::from_pkcs8_der(cert.clone(), &pkcs8).unwrap();
+            crosses(&cert, &credential, Some(&software_key), name);
+        }
+    }
+
+    #[test]
+    fn ml_kem_in_the_secure_enclave() {
+        if !SecurityFrameworkCrypto::ml_kem_available()
+            || !SecurityFrameworkCrypto::secure_enclave_available()
+        {
+            println!("Secure Enclave ML-KEM: skipped, no Secure Enclave or no CryptoKit ML-KEM");
+            return;
+        }
+        for (oid, name) in [
+            (ID_ALG_ML_KEM_768, "ML-KEM-768"),
+            (ID_ALG_ML_KEM_1024, "ML-KEM-1024"),
+        ] {
+            let (data, spki) = CryptoKitRecipientKey::generate_in_secure_enclave(oid)
+                .unwrap_or_else(|e| panic!("{name}: generating: {e}"));
+            let cert = certificate(&spki.to_der().unwrap());
+            let credential = CryptoKitRecipientKey::from_secure_enclave(cert.clone(), data)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            crosses(&cert, &credential, None, &format!("Secure Enclave {name}"));
+        }
+    }
+
+    #[test]
+    fn ml_kem_512_is_declined() {
+        let (cert, pkcs8) = software_key!(MlKem512);
+        assert!(matches!(
+            CryptoKitRecipientKey::from_pkcs8_der(cert.clone(), &pkcs8),
+            Err(Error::Unrecognized)
+        ));
+        let platform = security_framework_with_kem();
+        let r = KemRecipient::from_certificate(
+            &platform,
+            &cert,
+            None,
+            KdfAlgorithm::HkdfSha256,
+            KeyWrapAlgorithm::Aes256,
+            None,
+        )
+        .unwrap();
+        let built = EnvelopedDataBuilder::new(MESSAGE, ContentEncryptionAlgorithm::Aes256Cbc)
+            .unwrap()
+            .add_recipient(r)
+            .build_content_info(&platform, &mut rng());
+        assert!(built.is_err(), "ML-KEM-512 was not declined");
+    }
+
+    #[test]
+    fn a_key_that_is_not_the_certificates_is_refused() {
+        if !SecurityFrameworkCrypto::ml_kem_available() {
+            println!("ML-KEM: skipped, the running OS has no CryptoKit ML-KEM");
+            return;
+        }
+        let (cert, _) = software_key!(MlKem768);
+        let (_, other) = software_key!(MlKem768);
+        assert!(matches!(
+            CryptoKitRecipientKey::from_pkcs8_der(cert, &other),
+            Err(Error::InvalidInput(_))
+        ));
+        if SecurityFrameworkCrypto::secure_enclave_available() {
+            let (data, _) =
+                CryptoKitRecipientKey::generate_in_secure_enclave(ID_ALG_ML_KEM_768).unwrap();
+            let (cert, _) = software_key!(MlKem768);
+            assert!(matches!(
+                CryptoKitRecipientKey::from_secure_enclave(cert, data),
+                Err(Error::InvalidInput(_))
+            ));
+        }
+    }
 }
