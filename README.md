@@ -94,7 +94,24 @@ With the `cms` feature, `SecurityFrameworkCrypto` also implements
 transport and key agreement, and Security.framework keys serve as credentials:
 `SecurityFrameworkRecipientKey` decrypts, `SecurityFrameworkSigningKey` signs, and
 `KeychainIdentities` finds both among the keychain's identities: a decryption key by the recipient
-identifier a message contains, and signing keys by signer identifier, email address or subject.
+identifier a message contains, and signing keys by signer identifier, email address or subject,
+and `certificates()` lists them. `import_pkcs8` makes both credentials for an RSA or EC key held as
+PKCS #8, created in memory and not added to a keychain.
+
+With `cms` and `pqc`, ML-KEM is performed by CryptoKit, through the same Swift shim as ML-DSA:
+`SecurityFrameworkCrypto` encrypts to ML-KEM-768 and ML-KEM-1024 recipients, and
+`CryptoKitRecipientKey` decrypts with an ML-KEM key held in memory (from an RFC 9935 PKCS #8 key in
+the `seed` or `both` form; CryptoKit takes the seed, so `expandedKey` alone is refused) or in the
+Secure Enclave (from its `dataRepresentation`, e.g. one an app made with CryptoKit's
+`SecureEnclave.MLKEM768.PrivateKey`). `CryptoKitRecipientKey::generate_in_secure_enclave` makes a
+Secure Enclave key and returns its public key, to be certified. Each constructor checks the key
+against the certificate. The shim is stateless: the seed or `dataRepresentation` is passed on every
+call. CryptoKit performs the encapsulation or decapsulation and the HKDF, so the shared secret never
+leaves it; the key-encryption key it returns is used by CommonCrypto's AES key wrap.
+`SecurityFrameworkCrypto::ml_kem_available` and `secure_enclave_available` report what the running
+device offers. A Secure Enclave key whose access control requires user presence asks for it at each
+decryption. CryptoKit ML-KEM keys are not keychain identities, so `KeychainIdentities` does not find
+them.
 
 | Operation | Coverage |
 |---|---|
@@ -102,7 +119,7 @@ identifier a message contains, and signing keys by signer identifier, email addr
 | Key transport | RSAES-PKCS1-v1_5, RSAES-OAEP with SHA-1/256/384/512, by `SecKeyCreateEncryptedData` and `SecKeyCreateDecryptedData` |
 | Key agreement | ephemeral-static ECDH on P-256, P-384 and P-521 with the X9.63 KDF (SHA-256/384/512), by `SecKeyCopyKeyExchangeResult`, then CommonCrypto's AES key wrap |
 | Signing | RSA PKCS #1 v1.5 and RSASSA-PSS, and ECDSA, by `SecKeyCreateSignature` |
-| KEM | declined |
+| KEM | ML-KEM-768 and ML-KEM-1024 with HKDF-SHA256/384/512 (RFC 9629), by CryptoKit on macOS and iOS 26 and later, with `pqc`; ML-KEM-512, which CryptoKit does not offer, is declined, and without `pqc` or on an older OS, every KEM |
 
 Security.framework performs ECDH and the X9.63 KDF in one call, so the shared secret never leaves
 it, in either direction.
@@ -140,19 +157,25 @@ The assertion in each case is **agreement**, not success, and `--nocapture` prin
 verifications the platform answered itself. The `pqc` feature builds the CryptoKit shim and gives the
 ML-DSA collections a software verdict to compare against.
 
+With `cms` and `pqc`, the CMS tests also cross ML-KEM-768 and ML-KEM-1024 with software in both
+directions, for every KDF and wrap, with keys held in memory and, where the device has a Secure
+Enclave, keys generated there for the test. A process that cannot reach the Secure Enclave (e.g. one
+in a restrictive sandbox) reports that test as skipped.
+
 ## Status
 
 Run on macOS 26.6 (Apple silicon) against rust-pki's PKITS collections: Security.framework answered
 all 389 RSA and 388 ECDSA verifications that software accepted, with no disagreements in either
-interface. With `pqc`, CryptoKit answered 391 of the 394 ML-DSA-65 and ML-DSA-87 verifications
-software accepted in each collection, with no disagreements; the other 3 in each are signed with
-ML-DSA-44, which CryptoKit lacks, and went to software. ML-DSA-44 went entirely to software. Builds for iOS; not yet run there.
+interface. With `pqc`, CryptoKit answered all 390 ML-DSA-65 and ML-DSA-87 verifications software
+accepted in each collection (macOS 26.6.2, 2026-11-06), with no disagreements, and ML-DSA-44 went
+entirely to software. Builds for iOS; not yet run there.
 
 Whether Apple's corecrypto validation covers a given OS release is a question for NIST's CMVP list,
 not for this crate.
 
 With the `cms` feature, on macOS 26.6, every CMS test passes, crossed with certval-cms's software in
-both directions, and the keychain is searched.
+both directions, and the keychain is searched. With `cms` and `pqc`, on macOS 26.6.2 (Apple
+silicon), the ML-KEM tests pass for keys in memory and in the Secure Enclave.
 
 certval-cms is not on crates.io yet, so `Cargo.toml`'s `[patch.crates-io]` takes it from a
 neighboring checkout (`../certval-cms`), and CI checks it out there. Both go when it publishes, and

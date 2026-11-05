@@ -8,7 +8,11 @@ an increase to the minimum supported Rust version is not treated as a breaking c
 implements certval-cms's AES-CBC content encryption and decryption (CommonCrypto), RSA key transport
 and ECDH key agreement with the X9.63 KDF (Security.framework), with `SecurityFrameworkRecipientKey`
 and `SecurityFrameworkSigningKey` decrypting and signing with Security.framework keys and
-`KeychainIdentities` finding them in the keychain.
+`KeychainIdentities` finding them in the keychain, and listing them with `certificates()`.
+`import_pkcs8` makes both credentials for a PKCS #8 RSA or EC key, checked against its certificate.
+With `cms` and `pqc`, ML-KEM-768 and ML-KEM-1024 by CryptoKit: `SecurityFrameworkCrypto` encrypts to
+ML-KEM recipients, and `CryptoKitRecipientKey` decrypts with a key held as a seed or in the Secure
+Enclave, with the encapsulation, decapsulation and HKDF inside CryptoKit.
 
 ## [0.1.0-rc.1] - 2026-10-31
 

@@ -1,4 +1,5 @@
-//! Turning a `SubjectPublicKeyInfo` into a Security.framework public key.
+//! Turning a `SubjectPublicKeyInfo` into a Security.framework public key, and key data into a
+//! private key.
 //!
 //! `SecKeyCreateWithData` takes the key in the form the `subjectPublicKey` `BIT STRING` already
 //! holds: a PKCS #1 `RSAPublicKey` for RSA, and an uncompressed X9.63 point for elliptic curve
@@ -23,8 +24,8 @@ use core_foundation::string::CFString;
 use log::debug;
 use security_framework::key::SecKey;
 use security_framework_sys::item::{
-    kSecAttrKeyClass, kSecAttrKeyClassPublic, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom,
-    kSecAttrKeyTypeRSA,
+    kSecAttrKeyClass, kSecAttrKeyClassPrivate, kSecAttrKeyClassPublic, kSecAttrKeyType,
+    kSecAttrKeyTypeECSECPrimeRandom, kSecAttrKeyTypeRSA,
 };
 use security_framework_sys::key::SecKeyCreateWithData;
 use spki::SubjectPublicKeyInfoOwned;
@@ -91,12 +92,35 @@ pub(crate) fn key_data(
 
 /// Creates a public `SecKey` from `data`, or `None` when the platform refuses it.
 pub(crate) fn create_public_key(data: &[u8], key_type: PlatformKeyType) -> Option<SecKey> {
+    create_key(data, key_type, KeyClass::Public)
+}
+
+/// Creates a private `SecKey` from `data`, a PKCS #1 `RSAPrivateKey` for RSA, and the uncompressed
+/// point followed by the private scalar for elliptic curve keys, or `None` when the platform
+/// refuses it. The key is not added to a keychain.
+#[cfg(feature = "cms")]
+pub(crate) fn create_private_key(data: &[u8], key_type: PlatformKeyType) -> Option<SecKey> {
+    create_key(data, key_type, KeyClass::Private)
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum KeyClass {
+    Public,
+    #[cfg_attr(not(feature = "cms"), allow(dead_code))]
+    Private,
+}
+
+fn create_key(data: &[u8], key_type: PlatformKeyType, class: KeyClass) -> Option<SecKey> {
     // SAFETY: the attribute names and values are immutable constants exported by
     // Security.framework, so taking them under the get rule neither leaks nor frees them.
     let attributes = unsafe {
         let type_value = match key_type {
             PlatformKeyType::Rsa => kSecAttrKeyTypeRSA,
             PlatformKeyType::Ec => kSecAttrKeyTypeECSECPrimeRandom,
+        };
+        let class_value = match class {
+            KeyClass::Public => kSecAttrKeyClassPublic,
+            KeyClass::Private => kSecAttrKeyClassPrivate,
         };
         CFDictionary::<CFString, CFType>::from_CFType_pairs(&[
             (
@@ -105,7 +129,7 @@ pub(crate) fn create_public_key(data: &[u8], key_type: PlatformKeyType) -> Optio
             ),
             (
                 CFString::wrap_under_get_rule(kSecAttrKeyClass),
-                CFString::wrap_under_get_rule(kSecAttrKeyClassPublic).as_CFType(),
+                CFString::wrap_under_get_rule(class_value).as_CFType(),
             ),
         ])
     };
@@ -123,7 +147,11 @@ pub(crate) fn create_public_key(data: &[u8], key_type: PlatformKeyType) -> Optio
         );
         if !error.is_null() {
             let error = CFError::wrap_under_create_rule(error);
-            debug!("Security.framework declined to import a public key: {error}");
+            let class = match class {
+                KeyClass::Public => "public",
+                KeyClass::Private => "private",
+            };
+            debug!("Security.framework declined to import a {class} key: {error}");
         }
         if key.is_null() {
             return None;

@@ -34,7 +34,7 @@ use zeroize::Zeroizing;
 
 use crate::algorithm::{message_algorithm, KeyKind};
 use crate::commoncrypto::{aes_cbc, aes_key_unwrap, aes_key_wrap, Direction};
-use crate::key::{create_public_key, key_data, PlatformKeyType};
+use crate::key::{create_private_key, create_public_key, key_data, PlatformKeyType};
 use crate::SecurityFrameworkCrypto;
 
 /// Length in octets of an AES-CBC IV.
@@ -427,6 +427,13 @@ impl KeychainIdentities {
         }
         Ok(found)
     }
+
+    /// The certificate of every identity in the keychains the process can search, i.e. every
+    /// certificate with a private key, for a caller to list or choose among. A credential for one
+    /// is found through either source interface, by its identifier.
+    pub fn certificates(&self) -> Result<Vec<Certificate>> {
+        Ok(self.find(|_| true)?.into_iter().map(|(c, _)| c).collect())
+    }
 }
 
 impl RecipientCredentialSource for KeychainIdentities {
@@ -461,4 +468,80 @@ impl SigningCredentialSource for KeychainIdentities {
             })
             .collect())
     }
+}
+
+/// Credentials for an RSA or elliptic curve key imported into Security.framework from PKCS #8, for
+/// a key held in software that should be used through Security.framework, e.g. for testing. The
+/// key is created in memory and not added to a keychain. It must be the key `certificate`
+/// contains, and an elliptic curve key must be on P-256, P-384 or P-521.
+pub fn import_pkcs8(
+    certificate: Certificate,
+    pkcs8: &[u8],
+) -> Result<(SecurityFrameworkRecipientKey, SecurityFrameworkSigningKey)> {
+    let invalid = |e: &str| Error::InvalidInput(format!("a PKCS #8 key to import: {e}"));
+    let info = pkcs8::PrivateKeyInfoRef::from_der(pkcs8).map_err(|e| invalid(&e.to_string()))?;
+    let spki = certificate.tbs_certificate().subject_public_key_info();
+    if info.algorithm.oid != spki.algorithm.oid {
+        return Err(invalid("not the type of key the certificate contains"));
+    }
+    let private_key = info.private_key.as_bytes();
+    // The point is the certificate's, for an elliptic curve key.
+    let (data, key_type, point) = match spki.algorithm.oid {
+        // The PKCS #8 privateKey of an RSA key is the PKCS #1 RSAPrivateKey Security.framework takes.
+        RSA_ENCRYPTION => (
+            Zeroizing::new(private_key.to_vec()),
+            PlatformKeyType::Rsa,
+            None,
+        ),
+        ID_EC_PUBLIC_KEY => {
+            let (point, _) = key_data(spki, KeyKind::Ec)
+                .ok_or_else(|| invalid("not a key on P-256, P-384 or P-521"))?;
+            let scalar = sec1::EcPrivateKey::from_der(private_key)
+                .map_err(|e| invalid(&e.to_string()))?
+                .private_key;
+            // Security.framework takes the point followed by the scalar, at the curve's length.
+            let scalar_len = (point.len() - 1) / 2;
+            if scalar.len() > scalar_len {
+                return Err(invalid("a private scalar longer than the curve's"));
+            }
+            let mut data = Zeroizing::new(Vec::with_capacity(point.len() + scalar_len));
+            data.extend_from_slice(point);
+            data.resize(point.len() + scalar_len - scalar.len(), 0);
+            data.extend_from_slice(scalar);
+            (data, PlatformKeyType::Ec, Some(point))
+        }
+        _ => return Err(Error::Unrecognized),
+    };
+    let key = create_private_key(&data, key_type)
+        .ok_or_else(|| invalid("Security.framework did not accept the key"))?;
+    let matches = match point {
+        // An RSA private key holds its modulus and public exponent, from which Security.framework
+        // derives the public key.
+        None => key
+            .public_key()
+            .and_then(|public| public.external_representation())
+            .is_some_and(|public| spki.subject_public_key.as_bytes() == Some(public.bytes())),
+        // An elliptic curve key's point was taken from the certificate, and Security.framework does
+        // not check it against the scalar, so the pair is checked by a signature the certificate's
+        // key verifies.
+        Some(point) => {
+            let algorithm = Algorithm::ECDSASignatureMessageX962SHA256;
+            let message = b"certval-security-framework import_pkcs8";
+            let signature = key
+                .create_signature(algorithm, message)
+                .map_err(|e| invalid(&format!("Security.framework could not sign: {e}")))?;
+            create_public_key(point, key_type).is_some_and(|public| {
+                public
+                    .verify_signature(algorithm, message, &signature)
+                    .unwrap_or(false)
+            })
+        }
+    };
+    if !matches {
+        return Err(invalid("not the key the certificate contains"));
+    }
+    Ok((
+        SecurityFrameworkRecipientKey::new(certificate.clone(), key.clone()),
+        SecurityFrameworkSigningKey::new(certificate, key),
+    ))
 }

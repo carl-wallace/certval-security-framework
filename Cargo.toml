@@ -18,14 +18,15 @@ include = ["src/**/*.rs", "README.md", "CHANGELOG.md", "LICENSE-APACHE", "LICENS
 
 [features]
 default = []
-# Post-quantum signatures. On an Apple target, compiles the CryptoKit shim in swift/ (which needs
+# Post-quantum algorithms. On an Apple target, compiles the CryptoKit shim in swift/ (which needs
 # Xcode's Swift toolchain) so ML-DSA-65 and ML-DSA-87 are verified by CryptoKit on macOS and iOS
-# 26 and later. Also enables certval's software ML-DSA and SLH-DSA, which answer what CryptoKit
-# does not (ML-DSA-44, SLH-DSA, and ML-DSA on an older OS).
+# 26 and later, and with `cms`, ML-KEM-768 and ML-KEM-1024 are performed by CryptoKit, with keys
+# in memory or in the Secure Enclave. Also enables certval's software ML-DSA and SLH-DSA, which
+# answer what CryptoKit does not (ML-DSA-44, SLH-DSA, and ML-DSA on an older OS).
 pqc = ["certval/pqc"]
 # Implements certval-cms's content encryption and decryption, key transport and key agreement, and
 # recipient and signing credentials over Security.framework keys, including keychain identities.
-cms = ["dep:certval-cms", "dep:cms", "dep:x509-cert", "dep:zeroize"]
+cms = ["dep:certval-cms", "dep:cms", "dep:pkcs8", "dep:sec1", "dep:x509-cert", "dep:zeroize"]
 
 [dependencies]
 certval = { version = "0.2.0-rc.1", default-features = false }
@@ -39,6 +40,8 @@ log = "0.4.33"
 # Under the `cms` feature.
 certval-cms = { version = "0.1.0-rc.1", optional = true }
 cms = { version = "0.3.0-rc.0", optional = true }
+pkcs8 = { version = "0.11.0", optional = true }
+sec1 = { version = "0.8.1", default-features = false, optional = true }
 x509-cert = { version = "0.3.0", default-features = false, optional = true }
 zeroize = { version = "1.8.1", optional = true }
 
@@ -63,6 +66,8 @@ signature = "3.0.0"
 rsa = { version = "=0.10.0-rc.19", features = ["encoding"] }
 getrandom = { version = "0.4.1", features = ["sys_rng"] }
 rand_core = "0.10.1"
+# The ML-KEM tests, under `pqc`: keys for software to hold, and PKCS #8 for CryptoKitRecipientKey.
+ml-kem = { version = "0.3.3", features = ["pkcs8"] }
 
 [package.metadata.docs.rs]
 # The provider exists only on Apple targets. pqc stays off: docs.rs has no Swift toolchain to

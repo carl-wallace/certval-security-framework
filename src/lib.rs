@@ -60,6 +60,15 @@
 //! answer. [`SecurityFrameworkCrypto::ml_dsa_available`] reports whether CryptoKit's ML-DSA is
 //! present.
 //!
+//! # ML-KEM
+//!
+//! With the `cms` and `pqc` features, ML-KEM-768 and ML-KEM-1024 KEMRecipientInfo are performed by
+//! CryptoKit through the same shim: [`SecurityFrameworkCrypto`] encrypts to an ML-KEM recipient, and
+//! `CryptoKitRecipientKey` decrypts with a key held in memory or in the Secure Enclave. The
+//! shared secret stays in CryptoKit. ML-KEM-512, which CryptoKit lacks, is declined.
+//! [`SecurityFrameworkCrypto::ml_kem_available`] and
+//! [`SecurityFrameworkCrypto::secure_enclave_available`] report what the device offers.
+//!
 //! # Hashing
 //!
 //! Security.framework offers no digest function, so [`CalculateHash`](certval::CalculateHash) is
@@ -77,16 +86,25 @@ mod cms;
 #[cfg(target_vendor = "apple")]
 #[allow(unsafe_code)]
 mod commoncrypto;
+#[cfg(all(target_vendor = "apple", feature = "cms", feature = "pqc"))]
+mod cryptokit;
 #[cfg(target_vendor = "apple")]
 #[allow(unsafe_code)]
 mod key;
 #[cfg(all(target_vendor = "apple", feature = "pqc"))]
 #[allow(unsafe_code)]
 mod mldsa;
+#[cfg(all(target_vendor = "apple", feature = "cms", feature = "pqc"))]
+#[allow(unsafe_code)]
+mod mlkem;
 #[cfg(target_vendor = "apple")]
 mod provider;
 
 #[cfg(all(target_vendor = "apple", feature = "cms"))]
-pub use cms::{KeychainIdentities, SecurityFrameworkRecipientKey, SecurityFrameworkSigningKey};
+pub use cms::{
+    import_pkcs8, KeychainIdentities, SecurityFrameworkRecipientKey, SecurityFrameworkSigningKey,
+};
+#[cfg(all(target_vendor = "apple", feature = "cms", feature = "pqc"))]
+pub use cryptokit::CryptoKitRecipientKey;
 #[cfg(target_vendor = "apple")]
 pub use provider::SecurityFrameworkCrypto;
