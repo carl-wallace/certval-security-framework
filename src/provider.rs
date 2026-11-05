@@ -1,10 +1,14 @@
-//! The provider that implements certval's verification interfaces against Security.framework.
+//! The provider that implements certval's verification interfaces against Security.framework, and
+//! its hashing interface against CommonCrypto.
 
 use crate::algorithm::{digest_algorithm, message_algorithm, KeyKind};
+use crate::commoncrypto::{digest, Digest};
 use crate::key::{create_public_key, key_data};
 use certval::{
-    PathValidationStatus, PkiEnvironment, VerifySignatureDigest, VerifySignatureMessage,
+    CalculateHash, PathValidationStatus, PkiEnvironment, VerifySignatureDigest,
+    VerifySignatureMessage,
 };
+use const_oid::db::rfc5912::{ID_SHA_1, ID_SHA_224, ID_SHA_256, ID_SHA_384, ID_SHA_512};
 use der::asn1::BitString;
 use log::{debug, trace};
 use security_framework_sys::key::Algorithm;
@@ -157,5 +161,27 @@ impl VerifySignatureDigest for SecurityFrameworkCrypto {
         };
         let signature = signature.as_bytes().ok_or(certval::Error::ParseError)?;
         self.verify_with(spki, kind, algorithm, hash_to_verify, signature)
+    }
+}
+
+impl CalculateHash for SecurityFrameworkCrypto {
+    /// SHA-1, SHA-224, SHA-256, SHA-384 and SHA-512, by CommonCrypto; anything else is declined.
+    fn calculate_hash(
+        &self,
+        _pe: &PkiEnvironment,
+        hash_alg: &AlgorithmIdentifierOwned,
+        buffer_to_hash: &[u8],
+    ) -> certval::Result<Vec<u8>> {
+        let algorithm = match hash_alg.oid {
+            ID_SHA_1 => Digest::Sha1,
+            ID_SHA_224 => Digest::Sha224,
+            ID_SHA_256 => Digest::Sha256,
+            ID_SHA_384 => Digest::Sha384,
+            ID_SHA_512 => Digest::Sha512,
+            _ => return Err(certval::Error::Unrecognized),
+        };
+        let hashed = digest(algorithm, buffer_to_hash).ok_or(certval::Error::Unrecognized)?;
+        trace!("CommonCrypto calculated a {algorithm:?} digest");
+        Ok(hashed)
     }
 }

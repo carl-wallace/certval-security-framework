@@ -2,6 +2,14 @@
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), except that
 an increase to the minimum supported Rust version is not treated as a breaking change.
 
+## Unreleased
+
+`CalculateHash`, by CommonCrypto: SHA-1, SHA-224, SHA-256, SHA-384 and SHA-512. A `cms` feature
+implements certval-cms's AES-CBC content encryption and decryption (CommonCrypto), RSA key transport
+and ECDH key agreement with the X9.63 KDF (Security.framework), with `SecurityFrameworkRecipientKey`
+and `SecurityFrameworkSigningKey` decrypting and signing with Security.framework keys and
+`KeychainIdentities` finding them in the keychain.
+
 ## [0.1.0-rc.1] - 2026-10-31
 
 Initial release. Verifies RSA PKCS #1 v1.5, RSASSA-PSS and ECDSA (P-256/384/521) certificate
