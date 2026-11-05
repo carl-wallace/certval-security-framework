@@ -62,16 +62,21 @@
 //!
 //! # Hashing
 //!
-//! The provider implements verification only. Security.framework offers no digest function, so
-//! [`CalculateHash`](certval::CalculateHash) stays with whatever else is registered. The message
-//! interface is unaffected: `SecKeyVerifySignature` hashes the message itself with a
-//! `...Message...` algorithm, so the hash a signature covers is computed inside the platform module.
+//! Security.framework offers no digest function, so [`CalculateHash`](certval::CalculateHash) is
+//! implemented with CommonCrypto, its companion interface over the same module, corecrypto: SHA-1,
+//! SHA-224, SHA-256, SHA-384 and SHA-512. The message interface hashes inside Security.framework
+//! too: `SecKeyVerifySignature` hashes the message itself with a `...Message...` algorithm.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 #[cfg(target_vendor = "apple")]
 mod algorithm;
+#[cfg(all(target_vendor = "apple", feature = "cms"))]
+mod cms;
+#[cfg(target_vendor = "apple")]
+#[allow(unsafe_code)]
+mod commoncrypto;
 #[cfg(target_vendor = "apple")]
 #[allow(unsafe_code)]
 mod key;
@@ -81,5 +86,7 @@ mod mldsa;
 #[cfg(target_vendor = "apple")]
 mod provider;
 
+#[cfg(all(target_vendor = "apple", feature = "cms"))]
+pub use cms::{KeychainIdentities, SecurityFrameworkRecipientKey, SecurityFrameworkSigningKey};
 #[cfg(target_vendor = "apple")]
 pub use provider::SecurityFrameworkCrypto;

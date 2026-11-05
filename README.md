@@ -82,9 +82,30 @@ forbids) is declined.
 
 ## Hashing
 
-The provider implements verification only. Security.framework offers no digest function, so
-`CalculateHash` stays with whatever else is registered. The message interface is unaffected: a
-`...Message...` algorithm hashes the message inside the platform.
+Security.framework offers no digest function, so `CalculateHash` is implemented with CommonCrypto,
+its companion C interface over the same module, corecrypto: SHA-1, SHA-224, SHA-256, SHA-384 and
+SHA-512. The message interface hashes inside Security.framework too: a `...Message...` algorithm
+hashes the message itself.
+
+## CMS
+
+With the `cms` feature, `SecurityFrameworkCrypto` also implements
+[certval-cms](https://github.com/carl-wallace/certval-cms)'s content encryption and decryption, key
+transport and key agreement, and Security.framework keys serve as credentials:
+`SecurityFrameworkRecipientKey` decrypts, `SecurityFrameworkSigningKey` signs, and
+`KeychainIdentities` finds both among the keychain's identities: a decryption key by the recipient
+identifier a message contains, and signing keys by signer identifier, email address or subject.
+
+| Operation | Coverage |
+|---|---|
+| Content encryption and decryption | AES-128/192/256-CBC, by CommonCrypto; AES-GCM, which CommonCrypto does not offer, is declined |
+| Key transport | RSAES-PKCS1-v1_5, RSAES-OAEP with SHA-1/256/384/512, by `SecKeyCreateEncryptedData` and `SecKeyCreateDecryptedData` |
+| Key agreement | ephemeral-static ECDH on P-256, P-384 and P-521 with the X9.63 KDF (SHA-256/384/512), by `SecKeyCopyKeyExchangeResult`, then CommonCrypto's AES key wrap |
+| Signing | RSA PKCS #1 v1.5 and RSASSA-PSS, and ECDSA, by `SecKeyCreateSignature` |
+| KEM | declined |
+
+Security.framework performs ECDH and the X9.63 KDF in one call, so the shared secret never leaves
+it, in either direction.
 
 ## Testing
 
@@ -129,6 +150,13 @@ ML-DSA-44, which CryptoKit lacks, and went to software. ML-DSA-44 went entirely 
 
 Whether Apple's corecrypto validation covers a given OS release is a question for NIST's CMVP list,
 not for this crate.
+
+With the `cms` feature, on macOS 26.6, every CMS test passes, crossed with certval-cms's software in
+both directions, and the keychain is searched.
+
+certval-cms is not on crates.io yet, so `Cargo.toml`'s `[patch.crates-io]` takes it from a
+neighboring checkout (`../certval-cms`), and CI checks it out there. Both go when it publishes, and
+this crate cannot publish before it does.
 
 certval is consumed from crates.io. A commented `[patch.crates-io]` line in `Cargo.toml` redirects
 the dependency to a local checkout for developing both crates together.
