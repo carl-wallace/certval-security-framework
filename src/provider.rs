@@ -154,11 +154,11 @@ impl VerifySignatureMessage for SecurityFrameworkCrypto {
                 signature,
             ) {
                 Verdict::Valid => {
-                    trace!("Security.framework verified an ML-DSA signature");
+                    trace!("CryptoKit verified an ML-DSA-{parameter_set} signature");
                     Ok(())
                 }
                 Verdict::Invalid => {
-                    trace!("Security.framework rejected an ML-DSA signature");
+                    trace!("CryptoKit rejected an ML-DSA-{parameter_set} signature");
                     Err(certval::Error::PathValidation(
                         PathValidationStatus::SignatureVerificationFailure,
                     ))

@@ -798,3 +798,93 @@ mod cryptokit_ml_dsa {
         }
     }
 }
+
+// ---- keys without certificates
+
+/// A key with no certificate signs its own certificate request through x509-cert's builder, and
+/// software verifies it with the key's public key, which is the one the request carries.
+fn signs_its_request(key: &dyn certval_cms::SigningKey, digest: DigestAlgorithm, name: &str) {
+    use certval_cms::{CredentialSignature, CredentialSigner};
+    use x509_cert::request::RequestBuilder;
+    let platform = security_framework();
+    let signer =
+        CredentialSigner::new(&platform, key, digest).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let request =
+        RequestBuilder::new(Name::from_str("CN=certval-security-framework request").unwrap())
+            .unwrap()
+            .build::<_, CredentialSignature>(&signer)
+            .unwrap_or_else(|e| panic!("{name}: signing the request: {e}"));
+    assert_eq!(&request.info.public_key, key.public_key(), "{name}");
+    let software = software();
+    let pe = software.pki_environment().unwrap();
+    pe.verify_signature_message(
+        pe,
+        &request.info.to_der().unwrap(),
+        &request.signature,
+        &request.algorithm,
+        &request.info.public_key,
+    )
+    .unwrap_or_else(|e| panic!("{name}: verifying the request: {e:?}"));
+}
+
+#[test]
+fn imported_keys_without_certificates_sign_requests() {
+    use certval_security_framework::import_pkcs8_key;
+    let rsa = Key::rsa();
+    let key = import_pkcs8_key(&rsa.pkcs8).unwrap();
+    assert_eq!(
+        key_spki(&key),
+        *rsa.cert.tbs_certificate().subject_public_key_info(),
+        "RSA"
+    );
+    signs_its_request(&key, DigestAlgorithm::Sha256, "RSA");
+    let ec = ec_key!(p256, 256);
+    let key = import_pkcs8_key(&ec.pkcs8).unwrap();
+    assert_eq!(
+        key_spki(&key),
+        *ec.cert.tbs_certificate().subject_public_key_info(),
+        "P-256"
+    );
+    signs_its_request(&key, DigestAlgorithm::Sha256, "P-256");
+}
+
+fn key_spki(key: &dyn certval_cms::SigningKey) -> SubjectPublicKeyInfoOwned {
+    key.public_key().clone()
+}
+
+#[cfg(feature = "pqc")]
+#[test]
+fn cryptokit_keys_without_certificates_sign_requests() {
+    use certval_cms::SigningKey;
+    use certval_security_framework::{CryptoKitKey, CryptoKitSigningKey};
+    use const_oid::db::fips204::ID_ML_DSA_65;
+    use ml_dsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+    use ml_dsa::signature::Keypair;
+    if !SecurityFrameworkCrypto::ml_dsa_available() {
+        println!("ML-DSA: skipped, the running OS has no CryptoKit ML-DSA");
+        return;
+    }
+    let mut seed = [0u8; 32];
+    rand_core::Rng::fill_bytes(&mut rng(), &mut seed);
+    let software_key = ml_dsa::SigningKey::<ml_dsa::MlDsa65>::from_seed(&seed.into());
+    let key =
+        CryptoKitKey::from_pkcs8_der(software_key.to_pkcs8_der().unwrap().as_bytes()).unwrap();
+    // CryptoKit derives the public key from the seed; it must be the one software derives.
+    assert_eq!(
+        key.public_key().to_der().unwrap(),
+        software_key
+            .verifying_key()
+            .to_public_key_der()
+            .unwrap()
+            .as_bytes(),
+    );
+    signs_its_request(&key, DigestAlgorithm::Sha512, "ML-DSA-65 seed");
+    if SecurityFrameworkCrypto::secure_enclave_available() {
+        let (data, spki) = CryptoKitSigningKey::generate_in_secure_enclave(ID_ML_DSA_65).unwrap();
+        let key = CryptoKitKey::from_secure_enclave(ID_ML_DSA_65, data).unwrap();
+        assert_eq!(*key.public_key(), spki);
+        signs_its_request(&key, DigestAlgorithm::Sha512, "ML-DSA-65 Secure Enclave");
+    } else {
+        println!("Secure Enclave ML-DSA: skipped, no Secure Enclave");
+    }
+}

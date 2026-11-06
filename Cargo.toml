@@ -72,8 +72,9 @@ ml-kem = { version = "0.3.3", features = ["pkcs8"] }
 ml-dsa = { version = "0.1.1", features = ["pkcs8"] }
 
 [package.metadata.docs.rs]
-# The provider exists only on Apple targets. pqc stays off: docs.rs has no Swift toolchain to
-# build the CryptoKit shim with.
+# The provider exists only on Apple targets. docs.rs has no Swift toolchain, but build.rs skips the
+# CryptoKit shim when DOCS_RS is set and rustdoc never links, so pqc can be documented with cms.
+features = ["cms", "pqc"]
 default-target = "aarch64-apple-darwin"
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 rustdoc-args = ["--cfg", "docsrs"]

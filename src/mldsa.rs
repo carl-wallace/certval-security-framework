@@ -44,6 +44,15 @@ extern "C" {
         public_len: *mut usize,
     ) -> i32;
     #[cfg(feature = "cms")]
+    fn certval_sf_mldsa_seed_public_key(
+        parameter_set: i32,
+        seed: *const u8,
+        seed_len: usize,
+        public_out: *mut u8,
+        public_capacity: usize,
+        public_len: *mut usize,
+    ) -> i32;
+    #[cfg(feature = "cms")]
     fn certval_sf_mldsa_secure_enclave_public_key(
         parameter_set: i32,
         data: *const u8,
@@ -230,6 +239,28 @@ pub(crate) fn secure_enclave_public_key(parameter_set: i32, data: &[u8]) -> Opti
             parameter_set,
             data.as_ptr(),
             data.len(),
+            public_key.as_mut_ptr(),
+            public_key.len(),
+            &mut public_len,
+        )
+    };
+    (result == 1).then(|| {
+        public_key.truncate(public_len);
+        public_key
+    })
+}
+
+/// The raw public key of the ML-DSA key `seed` generates, or `None` when CryptoKit refuses it.
+#[cfg(feature = "cms")]
+pub(crate) fn seed_public_key(parameter_set: i32, seed: &[u8]) -> Option<Vec<u8>> {
+    let mut public_key = vec![0u8; MAX_PUBLIC_KEY_LEN];
+    let mut public_len = 0usize;
+    // SAFETY: as for the Secure Enclave public key.
+    let result = unsafe {
+        certval_sf_mldsa_seed_public_key(
+            parameter_set,
+            seed.as_ptr(),
+            seed.len(),
             public_key.as_mut_ptr(),
             public_key.len(),
             &mut public_len,

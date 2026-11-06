@@ -203,3 +203,34 @@ public func certval_sf_mldsa_secure_enclave_public_key(
         return -1
     }
 }
+
+/// Writes the raw public key of the ML-DSA key the 32-octet seed `seed` generates, for a key held
+/// in memory that has no certificate to take its public key from.
+@_cdecl("certval_sf_mldsa_seed_public_key")
+public func certval_sf_mldsa_seed_public_key(
+    _ parameterSet: Int32,
+    _ seed: UnsafePointer<UInt8>, _ seedLen: Int,
+    _ publicOut: UnsafeMutablePointer<UInt8>, _ publicCapacity: Int,
+    _ publicLen: UnsafeMutablePointer<Int>
+) -> Int32 {
+    guard #available(macOS 26.0, iOS 26.0, *) else {
+        return -2
+    }
+    let seedData = Data(bytes: seed, count: seedLen)
+    do {
+        let publicKey: Data
+        switch parameterSet {
+        case 65:
+            publicKey = try MLDSA65.PrivateKey(seedRepresentation: seedData, publicKey: nil)
+                .publicKey.rawRepresentation
+        case 87:
+            publicKey = try MLDSA87.PrivateKey(seedRepresentation: seedData, publicKey: nil)
+                .publicKey.rawRepresentation
+        default:
+            return -1
+        }
+        return copyOut(publicKey, publicOut, publicCapacity, publicLen) ? 1 : -3
+    } catch {
+        return -1
+    }
+}

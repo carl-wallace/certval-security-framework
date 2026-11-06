@@ -11,7 +11,7 @@
 
 use certval_cms::{
     kem_other_info, CmsEnvironment, EncryptKem, Error, KdfAlgorithm, KemOutput, KeyWrapAlgorithm,
-    RecipientCredential, Result, SeedOrExpandedKey, SigningCredential,
+    RecipientCredential, Result, SeedOrExpandedKey, SigningCredential, SigningKey,
 };
 use der::Decode;
 use log::trace;
@@ -253,33 +253,34 @@ fn ml_dsa_parameter_set(spki: &SubjectPublicKeyInfoOwned) -> Result<i32> {
     mldsa::parameter_set(&spki.algorithm).ok_or(Error::Unrecognized)
 }
 
-/// A [`SigningCredential`] whose private key is a CryptoKit ML-DSA-65 or ML-DSA-87 key, held in
-/// memory or in the Secure Enclave, signing SignedData with pure ML-DSA and an empty context
-/// string (RFC 9882). It declines every other signature algorithm.
+/// A [`SigningKey`] whose private key is a CryptoKit ML-DSA-65 or ML-DSA-87 key, held in memory or
+/// in the Secure Enclave, with no certificate: e.g. a key signing its own certificate request or a
+/// self-signed certificate. It signs with pure ML-DSA and an empty context string (RFC 9882), and
+/// declines every other signature algorithm.
 ///
 /// The key is passed to CryptoKit on each signature, as its seed or its Secure Enclave
 /// `dataRepresentation`, so nothing is held on the Swift side between calls. A Secure Enclave key
 /// whose access control requires user presence asks for it at each signature.
 ///
 /// It holds private key material, so it implements neither `Debug` nor `Clone`.
-pub struct CryptoKitSigningKey {
-    certificate: Certificate,
+pub struct CryptoKitKey {
+    public_key: SubjectPublicKeyInfoOwned,
     parameter_set: i32,
     key: Key,
 }
 
-impl CryptoKitSigningKey {
-    /// A credential for an RFC 9881 ML-DSA private key in PKCS #8, in the `seed` or `both` form,
-    /// identified by `certificate`. CryptoKit takes the seed, so a key in the `expandedKey` form
-    /// alone cannot be used and is refused. The key must be the one `certificate` contains.
-    pub fn from_pkcs8_der(certificate: Certificate, der: &[u8]) -> Result<Self> {
+impl CryptoKitKey {
+    /// A key for an RFC 9881 ML-DSA private key in PKCS #8, in the `seed` or `both` form; CryptoKit
+    /// derives its public key from the seed. A key in the `expandedKey` form alone is refused, since
+    /// CryptoKit takes the seed.
+    pub fn from_pkcs8_der(der: &[u8]) -> Result<Self> {
         let invalid = |e: &str| Error::InvalidInput(format!("an ML-DSA PKCS #8 key: {e}"));
-        let spki = certificate.tbs_certificate().subject_public_key_info();
-        let parameter_set = ml_dsa_parameter_set(spki)?;
         let info = pkcs8::PrivateKeyInfoRef::from_der(der).map_err(|e| invalid(&e.to_string()))?;
-        if info.algorithm.oid != spki.algorithm.oid {
-            return Err(invalid("not the type of key the certificate contains"));
-        }
+        let algorithm = AlgorithmIdentifierOwned {
+            oid: info.algorithm.oid,
+            parameters: None,
+        };
+        let parameter_set = mldsa::parameter_set(&algorithm).ok_or(Error::Unrecognized)?;
         let seed = match SeedOrExpandedKey::from_der(info.private_key.as_bytes())? {
             SeedOrExpandedKey::Seed(seed) => seed,
             SeedOrExpandedKey::Both(both) => both.seed,
@@ -289,13 +290,110 @@ impl CryptoKitSigningKey {
                 ));
             }
         };
-        let credential = Self {
-            certificate,
+        let public = mldsa::seed_public_key(parameter_set, seed.as_bytes())
+            .ok_or_else(|| invalid("CryptoKit refused the seed"))?;
+        Ok(Self {
+            public_key: SubjectPublicKeyInfoOwned {
+                algorithm,
+                subject_public_key: der::asn1::BitString::from_bytes(&public)?,
+            },
             parameter_set,
             key: Key::Seed(Zeroizing::new(seed.as_bytes().to_vec())),
+        })
+    }
+
+    /// A key for the Secure Enclave ML-DSA key of the parameter set `algorithm` identifies, whose
+    /// `dataRepresentation` is `data_representation`, e.g. one from
+    /// [`CryptoKitSigningKey::generate_in_secure_enclave`]. It must be this device's.
+    pub fn from_secure_enclave(
+        algorithm: const_oid::ObjectIdentifier,
+        data_representation: Vec<u8>,
+    ) -> Result<Self> {
+        let algorithm = AlgorithmIdentifierOwned {
+            oid: algorithm,
+            parameters: None,
         };
-        credential.check_against_certificate()?;
-        Ok(credential)
+        let parameter_set = mldsa::parameter_set(&algorithm).ok_or(Error::Unrecognized)?;
+        let public = mldsa::secure_enclave_public_key(parameter_set, &data_representation)
+            .ok_or_else(|| {
+                Error::InvalidInput(String::from(
+                    "the Secure Enclave refused the key, e.g. one of another device",
+                ))
+            })?;
+        Ok(Self {
+            public_key: SubjectPublicKeyInfoOwned {
+                algorithm,
+                subject_public_key: der::asn1::BitString::from_bytes(&public)?,
+            },
+            parameter_set,
+            key: Key::SecureEnclave(data_representation),
+        })
+    }
+
+    fn private_key(&self) -> mldsa::PrivateKey<'_> {
+        match &self.key {
+            Key::Seed(seed) => mldsa::PrivateKey::Seed {
+                seed,
+                public_key: self.public_key.subject_public_key.raw_bytes(),
+            },
+            Key::SecureEnclave(data) => mldsa::PrivateKey::SecureEnclave(data),
+        }
+    }
+
+    fn sign(&self, alg: &AlgorithmIdentifierOwned, message: &[u8]) -> Result<Vec<u8>> {
+        if mldsa::parameter_set(alg) != Some(self.parameter_set) {
+            return Err(Error::Unrecognized);
+        }
+        let signature = mldsa::sign(self.parameter_set, self.private_key(), message)?;
+        trace!("CryptoKit signed with ML-DSA-{}", self.parameter_set);
+        Ok(signature)
+    }
+}
+
+impl SigningKey for CryptoKitKey {
+    fn public_key(&self) -> &SubjectPublicKeyInfoOwned {
+        &self.public_key
+    }
+
+    fn sign_message(
+        &self,
+        _env: &CmsEnvironment,
+        alg: &AlgorithmIdentifierOwned,
+        message: &[u8],
+    ) -> Result<Vec<u8>> {
+        self.sign(alg, message)
+    }
+}
+
+/// A [`SigningCredential`] whose private key is a CryptoKit ML-DSA-65 or ML-DSA-87 key, held in
+/// memory or in the Secure Enclave, signing SignedData with pure ML-DSA and an empty context
+/// string (RFC 9882): a [`CryptoKitKey`] with its certificate. It declines every other signature
+/// algorithm.
+///
+/// It holds private key material, so it implements neither `Debug` nor `Clone`.
+pub struct CryptoKitSigningKey {
+    certificate: Certificate,
+    key: CryptoKitKey,
+}
+
+impl CryptoKitSigningKey {
+    /// A credential for an RFC 9881 ML-DSA private key in PKCS #8, in the `seed` or `both` form,
+    /// identified by `certificate`. CryptoKit takes the seed, so a key in the `expandedKey` form
+    /// alone cannot be used and is refused. The key must be the one `certificate` contains.
+    pub fn from_pkcs8_der(certificate: Certificate, der: &[u8]) -> Result<Self> {
+        let spki = certificate.tbs_certificate().subject_public_key_info();
+        ml_dsa_parameter_set(spki)?;
+        if pkcs8::PrivateKeyInfoRef::from_der(der)
+            .map_err(|e| Error::InvalidInput(format!("an ML-DSA PKCS #8 key: {e}")))?
+            .algorithm
+            .oid
+            != spki.algorithm.oid
+        {
+            return Err(Error::InvalidInput(String::from(
+                "an ML-DSA PKCS #8 key: not the type of key the certificate contains",
+            )));
+        }
+        Self::with_key(certificate, CryptoKitKey::from_pkcs8_der(der)?)
     }
 
     /// A credential for the Secure Enclave ML-DSA key whose `dataRepresentation` is
@@ -307,33 +405,30 @@ impl CryptoKitSigningKey {
         data_representation: Vec<u8>,
     ) -> Result<Self> {
         let spki = certificate.tbs_certificate().subject_public_key_info();
-        let parameter_set = ml_dsa_parameter_set(spki)?;
-        let public = mldsa::secure_enclave_public_key(parameter_set, &data_representation)
-            .ok_or_else(|| {
-                Error::InvalidInput(String::from(
-                    "the Secure Enclave refused the key, e.g. one of another device",
-                ))
-            })?;
-        if public != public_key(spki)? {
+        ml_dsa_parameter_set(spki)?;
+        let key = CryptoKitKey::from_secure_enclave(spki.algorithm.oid, data_representation)?;
+        Self::with_key(certificate, key)
+    }
+
+    /// A credential for `key`, which must be the one `certificate` contains.
+    fn with_key(certificate: Certificate, key: CryptoKitKey) -> Result<Self> {
+        if key.public_key != *certificate.tbs_certificate().subject_public_key_info() {
             return Err(Error::InvalidInput(String::from(
-                "a Secure Enclave key that is not the one the certificate contains",
+                "an ML-DSA key that is not the one the certificate contains",
             )));
         }
-        Ok(Self {
-            certificate,
-            parameter_set,
-            key: Key::SecureEnclave(data_representation),
-        })
+        Ok(Self { certificate, key })
     }
 
     /// Generates an ML-DSA key in the Secure Enclave, of the parameter set `algorithm` identifies
     /// (ML-DSA-65 or ML-DSA-87), usable after first unlock on this device only, without user
     /// presence. Returns its `dataRepresentation`, for [`from_secure_enclave`](Self::from_secure_enclave)
-    /// once a certificate is issued, and its public key, for the certificate.
+    /// once a certificate is issued, or for [`CryptoKitKey::from_secure_enclave`] to sign a request,
+    /// and its public key.
     pub fn generate_in_secure_enclave(
         algorithm: const_oid::ObjectIdentifier,
     ) -> Result<(Vec<u8>, SubjectPublicKeyInfoOwned)> {
-        let algorithm = spki::AlgorithmIdentifierOwned {
+        let algorithm = AlgorithmIdentifierOwned {
             oid: algorithm,
             parameters: None,
         };
@@ -344,45 +439,6 @@ impl CryptoKitSigningKey {
             subject_public_key: der::asn1::BitString::from_bytes(&public)?,
         };
         Ok((data, spki))
-    }
-
-    fn private_key(&self) -> mldsa::PrivateKey<'_> {
-        match &self.key {
-            Key::Seed(seed) => mldsa::PrivateKey::Seed {
-                seed,
-                public_key: self
-                    .certificate
-                    .tbs_certificate()
-                    .subject_public_key_info()
-                    .subject_public_key
-                    .raw_bytes(),
-            },
-            Key::SecureEnclave(data) => mldsa::PrivateKey::SecureEnclave(data),
-        }
-    }
-
-    /// Whether the seed generates the certificate's key: a signature by the seed that the
-    /// certificate's key verifies.
-    fn check_against_certificate(&self) -> Result<()> {
-        let spki = self.certificate.tbs_certificate().subject_public_key_info();
-        let mismatch = || {
-            Error::InvalidInput(String::from(
-                "an ML-DSA key that is not the one the certificate contains",
-            ))
-        };
-        let message = b"certval-security-framework key check";
-        let signature =
-            mldsa::sign(self.parameter_set, self.private_key(), message).map_err(|_| mismatch())?;
-        match mldsa::verify(
-            self.parameter_set,
-            &spki.algorithm,
-            spki,
-            message,
-            &signature,
-        ) {
-            mldsa::Verdict::Valid => Ok(()),
-            _ => Err(mismatch()),
-        }
     }
 }
 
@@ -397,11 +453,6 @@ impl SigningCredential for CryptoKitSigningKey {
         alg: &AlgorithmIdentifierOwned,
         message: &[u8],
     ) -> Result<Vec<u8>> {
-        if mldsa::parameter_set(alg) != Some(self.parameter_set) {
-            return Err(Error::Unrecognized);
-        }
-        let signature = mldsa::sign(self.parameter_set, self.private_key(), message)?;
-        trace!("CryptoKit signed with ML-DSA-{}", self.parameter_set);
-        Ok(signature)
+        self.key.sign(alg, message)
     }
 }

@@ -103,9 +103,10 @@ mod provider;
 
 #[cfg(all(target_vendor = "apple", feature = "cms"))]
 pub use cms::{
-    import_pkcs8, KeychainIdentities, SecurityFrameworkRecipientKey, SecurityFrameworkSigningKey,
+    import_pkcs8, import_pkcs8_key, KeychainIdentities, SecurityFrameworkKey,
+    SecurityFrameworkRecipientKey, SecurityFrameworkSigningKey,
 };
 #[cfg(all(target_vendor = "apple", feature = "cms", feature = "pqc"))]
-pub use cryptokit::{CryptoKitRecipientKey, CryptoKitSigningKey};
+pub use cryptokit::{CryptoKitKey, CryptoKitRecipientKey, CryptoKitSigningKey};
 #[cfg(target_vendor = "apple")]
 pub use provider::SecurityFrameworkCrypto;
