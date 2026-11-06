@@ -29,7 +29,7 @@ pqc = ["certval/pqc"]
 cms = ["dep:certval-cms", "dep:cms", "dep:pkcs8", "dep:sec1", "dep:x509-cert", "dep:zeroize"]
 
 [dependencies]
-certval = { version = "0.2.0-rc.1", default-features = false }
+certval = { version = "0.2.0-rc.2", default-features = false }
 
 const-oid = { version = "0.10.2", features = ["db"] }
 der = { version = "0.8.1", features = ["alloc", "derive", "oid"] }
@@ -53,7 +53,7 @@ security-framework-sys = { version = "2.17.0", default-features = false }
 [dev-dependencies]
 # certval's software RSA, which the tests compare this provider's verdicts against. A dev-dependency,
 # so the application, not this crate, decides which algorithms certval's software offers.
-certval = { version = "0.2.0-rc.1", default-features = false, features = ["rsa"] }
+certval = { version = "0.2.0-rc.2", default-features = false, features = ["rsa"] }
 x509-cert = { version = "0.3.0", features = ["builder", "hazmat"] }
 p256 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
 p384 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
@@ -63,7 +63,7 @@ sha2 = "0.11.0"
 signature = "3.0.0"
 # The cms tests: RSA keys exported from Security.framework, recipient identifiers, and the random
 # number generator certval-cms's builders take.
-rsa = { version = "=0.10.0-rc.19", features = ["encoding"] }
+rsa = { version = "=0.10.0-rc.21", features = ["encoding"] }
 getrandom = { version = "0.4.1", features = ["sys_rng"] }
 rand_core = "0.10.1"
 # The ML-KEM tests, under `pqc`: keys for software to hold, and PKCS #8 for CryptoKitRecipientKey.
