@@ -121,6 +121,12 @@ pure ML-DSA with an empty context string, as RFC 9882 requires. Each constructor
 against the certificate, and the shim is stateless, as for ML-KEM. ML-DSA-44, which CryptoKit does
 not offer, is declined. Like the ML-KEM keys, these are not keychain identities.
 
+A key with no certificate yet, e.g. one signing its own certificate request, is certval-cms's
+`SigningKey`: `SecurityFrameworkKey` for an RSA or EC `SecKey` (`import_pkcs8_key` makes one from a
+PKCS #8 key; an EC key must carry its public key, which Security.framework does not derive), and
+`CryptoKitKey` for ML-DSA-65 and ML-DSA-87, held as a seed, whose public key CryptoKit derives, or in
+the Secure Enclave.
+
 | Operation | Coverage |
 |---|---|
 | Content encryption and decryption | AES-128/192/256-CBC, by CommonCrypto; AES-GCM, which CommonCrypto does not offer, is declined |

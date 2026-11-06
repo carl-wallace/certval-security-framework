@@ -16,7 +16,7 @@ use certval_cms::{
     EncryptContent, EncryptKeyAgreement, EncryptKeyTransport, Error, KeyAgreeOutput,
     KeyAgreementAlgorithm, KeyTransportAlgorithm, KeyWrapAlgorithm, RecipientCredential,
     RecipientCredentialSource, Result, SharedRecipientCredential, SharedSigningCredential,
-    SigningCredential, SigningCredentialLookup, SigningCredentialSource,
+    SigningCredential, SigningCredentialLookup, SigningCredentialSource, SigningKey,
 };
 use cms::enveloped_data::RecipientIdentifier;
 use const_oid::db::rfc5912::{
@@ -328,6 +328,92 @@ impl RecipientCredential for SecurityFrameworkRecipientKey {
     }
 }
 
+/// Signs `message` with `key`, whose public key is of the algorithm `key_alg`: RSA PKCS #1 v1.5 or
+/// RSASSA-PSS (salt the length of the hash), or ECDSA, by `SecKeyCreateSignature`, which hashes the
+/// message itself.
+fn sign_with(
+    key: &SecKey,
+    key_alg: const_oid::ObjectIdentifier,
+    alg: &AlgorithmIdentifierOwned,
+    message: &[u8],
+) -> Result<Vec<u8>> {
+    let Some((algorithm, kind)) = message_algorithm(alg) else {
+        return Err(Error::Unrecognized);
+    };
+    let fits = match kind {
+        KeyKind::Rsa | KeyKind::RsaPss => key_alg == RSA_ENCRYPTION,
+        KeyKind::Ec => key_alg == ID_EC_PUBLIC_KEY,
+    };
+    if !fits {
+        return Err(Error::Unrecognized);
+    }
+    let signature = key.create_signature(algorithm, message).map_err(|e| {
+        debug!("Security.framework could not sign: {e}");
+        Error::Crypto(String::from("signing failed"))
+    })?;
+    trace!("Security.framework signed with {}", alg.oid);
+    Ok(signature)
+}
+
+/// A [`SigningKey`] whose private key is a Security.framework key, with no certificate: e.g. a key
+/// signing its own certificate request or a self-signed certificate. It signs as
+/// [`SecurityFrameworkSigningKey`] does, and its public key is the one Security.framework gives.
+pub struct SecurityFrameworkKey {
+    public_key: SubjectPublicKeyInfoOwned,
+    key: SecKey,
+}
+
+impl SecurityFrameworkKey {
+    /// A key for `key`, an RSA private key or an EC private key on P-256, P-384 or P-521.
+    pub fn new(key: SecKey) -> Result<Self> {
+        let unknown = || Error::InvalidInput(String::from("a key with no public key to give"));
+        let public = key
+            .public_key()
+            .and_then(|public| public.external_representation())
+            .ok_or_else(unknown)?;
+        let public = public.bytes();
+        // An EC public key is the X9.63 point, 04 || X || Y; an RSA one is a PKCS #1 RSAPublicKey.
+        let curve = match (public.first(), public.len()) {
+            (Some(4), 65) => Some(SECP_256_R_1),
+            (Some(4), 97) => Some(SECP_384_R_1),
+            (Some(4), 133) => Some(SECP_521_R_1),
+            _ => None,
+        };
+        let algorithm = match curve {
+            Some(curve) => AlgorithmIdentifierOwned {
+                oid: ID_EC_PUBLIC_KEY,
+                parameters: Some(Any::from(&curve)),
+            },
+            None => AlgorithmIdentifierOwned {
+                oid: RSA_ENCRYPTION,
+                parameters: Some(Any::null()),
+            },
+        };
+        Ok(Self {
+            public_key: SubjectPublicKeyInfoOwned {
+                algorithm,
+                subject_public_key: der::asn1::BitString::from_bytes(public)?,
+            },
+            key,
+        })
+    }
+}
+
+impl SigningKey for SecurityFrameworkKey {
+    fn public_key(&self) -> &SubjectPublicKeyInfoOwned {
+        &self.public_key
+    }
+
+    fn sign_message(
+        &self,
+        _env: &CmsEnvironment,
+        alg: &AlgorithmIdentifierOwned,
+        message: &[u8],
+    ) -> Result<Vec<u8>> {
+        sign_with(&self.key, self.public_key.algorithm.oid, alg, message)
+    }
+}
+
 /// A [`SigningCredential`] whose private key is a Security.framework key, signing SignedData with
 /// RSA PKCS #1 v1.5 or RSASSA-PSS (salt the length of the hash), or ECDSA, by
 /// `SecKeyCreateSignature`, which hashes the message itself.
@@ -354,23 +440,7 @@ impl SigningCredential for SecurityFrameworkSigningKey {
         alg: &AlgorithmIdentifierOwned,
         message: &[u8],
     ) -> Result<Vec<u8>> {
-        let Some((algorithm, kind)) = message_algorithm(alg) else {
-            return Err(Error::Unrecognized);
-        };
-        let key_alg = key_algorithm(&self.certificate);
-        let fits = match kind {
-            KeyKind::Rsa | KeyKind::RsaPss => key_alg == RSA_ENCRYPTION,
-            KeyKind::Ec => key_alg == ID_EC_PUBLIC_KEY,
-        };
-        if !fits {
-            return Err(Error::Unrecognized);
-        }
-        let signature = self.key.create_signature(algorithm, message).map_err(|e| {
-            debug!("Security.framework could not sign: {e}");
-            Error::Crypto(String::from("signing failed"))
-        })?;
-        trace!("Security.framework signed with {}", alg.oid);
-        Ok(signature)
+        sign_with(&self.key, key_algorithm(&self.certificate), alg, message)
     }
 }
 
@@ -468,6 +538,61 @@ impl SigningCredentialSource for KeychainIdentities {
             })
             .collect())
     }
+}
+
+/// Imports the PKCS #8 (RFC 5958) private key `pkcs8`, RSA or EC on P-256, P-384 or P-521, into
+/// Security.framework, as a key with no certificate, e.g. to sign its own certificate request. The
+/// key is created in memory, not added to a keychain. Security.framework takes an EC key as its
+/// public point and private scalar and derives neither from the other, so an EC key must carry its
+/// public key, as OpenSSL writes it; the pair is checked by a signature.
+pub fn import_pkcs8_key(pkcs8: &[u8]) -> Result<SecurityFrameworkKey> {
+    let invalid = |e: &str| Error::InvalidInput(format!("a PKCS #8 key to import: {e}"));
+    let info = pkcs8::PrivateKeyInfoRef::from_der(pkcs8).map_err(|e| invalid(&e.to_string()))?;
+    let private_key = info.private_key.as_bytes();
+    let key = match info.algorithm.oid {
+        // The PKCS #8 privateKey of an RSA key is the PKCS #1 RSAPrivateKey Security.framework takes.
+        RSA_ENCRYPTION => create_private_key(private_key, PlatformKeyType::Rsa)
+            .ok_or_else(|| invalid("Security.framework did not accept the key"))?,
+        ID_EC_PUBLIC_KEY => {
+            let ec =
+                sec1::EcPrivateKey::from_der(private_key).map_err(|e| invalid(&e.to_string()))?;
+            let point = ec
+                .public_key
+                .ok_or_else(|| invalid("an EC key without its public key"))?;
+            let scalar_len = match point.len() {
+                65 => 32,
+                97 => 48,
+                133 => 66,
+                _ => return Err(invalid("not a key on P-256, P-384 or P-521")),
+            };
+            if ec.private_key.len() > scalar_len {
+                return Err(invalid("a private scalar longer than the curve's"));
+            }
+            // Security.framework takes the point followed by the scalar, at the curve's length.
+            let mut data = Zeroizing::new(Vec::with_capacity(point.len() + scalar_len));
+            data.extend_from_slice(point);
+            data.resize(point.len() + scalar_len - ec.private_key.len(), 0);
+            data.extend_from_slice(ec.private_key);
+            let key = create_private_key(&data, PlatformKeyType::Ec)
+                .ok_or_else(|| invalid("Security.framework did not accept the key"))?;
+            let algorithm = Algorithm::ECDSASignatureMessageX962SHA256;
+            let message = b"certval-security-framework import_pkcs8_key";
+            let signature = key
+                .create_signature(algorithm, message)
+                .map_err(|e| invalid(&format!("Security.framework could not sign: {e}")))?;
+            let pair = create_public_key(point, PlatformKeyType::Ec).is_some_and(|public| {
+                public
+                    .verify_signature(algorithm, message, &signature)
+                    .unwrap_or(false)
+            });
+            if !pair {
+                return Err(invalid("a public key that is not the private key's"));
+            }
+            key
+        }
+        _ => return Err(Error::Unrecognized),
+    };
+    SecurityFrameworkKey::new(key)
 }
 
 /// Credentials for an RSA or elliptic curve key imported into Security.framework from PKCS #8, for

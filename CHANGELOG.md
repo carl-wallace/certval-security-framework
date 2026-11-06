@@ -14,6 +14,9 @@ With `cms` and `pqc`, ML-KEM-768 and ML-KEM-1024 by CryptoKit: `SecurityFramewor
 ML-KEM recipients, and `CryptoKitRecipientKey` decrypts with a key held as a seed or in the Secure
 Enclave, with the encapsulation, decapsulation and HKDF inside CryptoKit. `CryptoKitSigningKey` signs
 with ML-DSA-65 and ML-DSA-87 by CryptoKit, with a key held as a seed or in the Secure Enclave.
+Signing keys without a certificate (certval-cms's `SigningKey`), e.g. to sign a certificate request:
+`SecurityFrameworkKey`, which `import_pkcs8_key` makes from a PKCS #8 RSA or EC key, and
+`CryptoKitKey` for ML-DSA, whose public key CryptoKit derives from a seed.
 
 ## [0.1.0-rc.1] - 2026-10-31
 
