@@ -68,6 +68,8 @@ getrandom = { version = "0.4.1", features = ["sys_rng"] }
 rand_core = "0.10.1"
 # The ML-KEM tests, under `pqc`: keys for software to hold, and PKCS #8 for CryptoKitRecipientKey.
 ml-kem = { version = "0.3.3", features = ["pkcs8"] }
+# The ML-DSA signing tests, under `pqc`: keys for software to hold, as PKCS #8 for CryptoKitSigningKey.
+ml-dsa = { version = "0.1.1", features = ["pkcs8"] }
 
 [package.metadata.docs.rs]
 # The provider exists only on Apple targets. pqc stays off: docs.rs has no Swift toolchain to

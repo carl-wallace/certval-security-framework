@@ -17,6 +17,10 @@
 //! decrypted by a `CryptoKitRecipientKey`, over a seed and, where the device has one, in the Secure
 //! Enclave, and messages this provider builds to them are decrypted by software. ML-KEM-512 is
 //! declined.
+//!
+//! ML-DSA, with `pqc`: messages a `CryptoKitSigningKey` signs with ML-DSA-65 and ML-DSA-87, over a
+//! seed and, where the device has one, in the Secure Enclave, are verified by software and by this
+//! provider alone. ML-DSA-44 is declined.
 
 #![cfg(all(target_vendor = "apple", feature = "cms"))]
 
@@ -670,6 +674,125 @@ mod cryptokit_ml_kem {
             let (cert, _) = software_key!(MlKem768);
             assert!(matches!(
                 CryptoKitRecipientKey::from_secure_enclave(cert, data),
+                Err(Error::InvalidInput(_))
+            ));
+        }
+    }
+}
+
+// ---- ML-DSA signing through CryptoKit
+
+#[cfg(feature = "pqc")]
+mod cryptokit_ml_dsa {
+    use super::*;
+    use certval_security_framework::CryptoKitSigningKey;
+    use const_oid::db::fips204::{ID_ML_DSA_65, ID_ML_DSA_87};
+    use ml_dsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+    use ml_dsa::{MlDsa44, MlDsa65, MlDsa87};
+    use rand_core::Rng as _;
+    use signature::Keypair;
+
+    /// A software ML-DSA key as PKCS #8, in the seed form, and its certificate.
+    macro_rules! software_key {
+        ($params:ty) => {{
+            let mut seed = [0u8; 32];
+            rng().fill_bytes(&mut seed);
+            let key = ml_dsa::SigningKey::<$params>::from_seed(&seed.into());
+            let cert = certificate(key.verifying_key().to_public_key_der().unwrap().as_bytes());
+            (cert, key.to_pkcs8_der().unwrap().as_bytes().to_vec())
+        }};
+    }
+
+    /// `credential` signs under this provider alone, and the signature is verified by software and
+    /// by this provider.
+    fn verifies_both_ways(credential: &CryptoKitSigningKey, name: &str) {
+        let platform = security_framework();
+        assert_signs_across(
+            &platform,
+            &software(),
+            credential,
+            |s| s,
+            &format!("CryptoKit signs, software verifies: {name}"),
+        );
+        assert_signs_across(
+            &platform,
+            &platform,
+            credential,
+            |s| s,
+            &format!("CryptoKit signs, Security.framework verifies: {name}"),
+        );
+    }
+
+    #[test]
+    fn ml_dsa_65_and_87_from_pkcs8() {
+        if !SecurityFrameworkCrypto::ml_dsa_available() {
+            println!("ML-DSA: skipped, the running OS has no CryptoKit ML-DSA");
+            return;
+        }
+        for (cert, pkcs8, name) in [
+            {
+                let (c, k) = software_key!(MlDsa65);
+                (c, k, "ML-DSA-65")
+            },
+            {
+                let (c, k) = software_key!(MlDsa87);
+                (c, k, "ML-DSA-87")
+            },
+        ] {
+            let credential = CryptoKitSigningKey::from_pkcs8_der(cert, &pkcs8)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            verifies_both_ways(&credential, name);
+        }
+    }
+
+    #[test]
+    fn ml_dsa_in_the_secure_enclave() {
+        if !SecurityFrameworkCrypto::ml_dsa_available()
+            || !SecurityFrameworkCrypto::secure_enclave_available()
+        {
+            println!("Secure Enclave ML-DSA: skipped, no Secure Enclave or no CryptoKit ML-DSA");
+            return;
+        }
+        for (oid, name) in [(ID_ML_DSA_65, "ML-DSA-65"), (ID_ML_DSA_87, "ML-DSA-87")] {
+            let (data, spki) = CryptoKitSigningKey::generate_in_secure_enclave(oid)
+                .unwrap_or_else(|e| panic!("{name}: generating: {e}"));
+            let cert = certificate(&spki.to_der().unwrap());
+            let credential = CryptoKitSigningKey::from_secure_enclave(cert, data)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            verifies_both_ways(&credential, &format!("Secure Enclave {name}"));
+        }
+    }
+
+    #[test]
+    fn ml_dsa_44_is_declined() {
+        let (cert, pkcs8) = software_key!(MlDsa44);
+        assert!(matches!(
+            CryptoKitSigningKey::from_pkcs8_der(cert, &pkcs8),
+            Err(Error::Unrecognized)
+        ));
+        assert!(matches!(
+            CryptoKitSigningKey::generate_in_secure_enclave(const_oid::db::fips204::ID_ML_DSA_44),
+            Err(Error::Unrecognized)
+        ));
+    }
+
+    #[test]
+    fn a_key_that_is_not_the_certificates_is_refused() {
+        if !SecurityFrameworkCrypto::ml_dsa_available() {
+            println!("ML-DSA: skipped, the running OS has no CryptoKit ML-DSA");
+            return;
+        }
+        let (cert, _) = software_key!(MlDsa65);
+        let (_, other) = software_key!(MlDsa65);
+        assert!(matches!(
+            CryptoKitSigningKey::from_pkcs8_der(cert, &other),
+            Err(Error::InvalidInput(_))
+        ));
+        if SecurityFrameworkCrypto::secure_enclave_available() {
+            let (data, _) = CryptoKitSigningKey::generate_in_secure_enclave(ID_ML_DSA_65).unwrap();
+            let (cert, _) = software_key!(MlDsa65);
+            assert!(matches!(
+                CryptoKitSigningKey::from_secure_enclave(cert, data),
                 Err(Error::InvalidInput(_))
             ));
         }

@@ -1,8 +1,12 @@
-// ML-DSA verification through CryptoKit, exposed to Rust as C functions.
+// ML-DSA through CryptoKit, exposed to Rust as C functions: verification, and signing with a key
+// held in memory or in the Secure Enclave.
 //
-// CryptoKit is a Swift-only API, so this is the one piece of the crate written in Swift. It is
-// compiled into a static library by build.rs when the `pqc` feature is enabled, and called from
-// src/mldsa.rs. Only public data crosses the boundary.
+// CryptoKit is a Swift-only API, so this and MLKEMShim.swift are the pieces of the crate written in
+// Swift. They are compiled into a static library by build.rs when the `pqc` feature is enabled,
+// and called from src/mldsa.rs. Verification passes only public data. Signing is stateless, as
+// ML-KEM's decapsulation is: a private key crosses on each call, as the seed of a key held in
+// memory or the `dataRepresentation` of a Secure Enclave key, which only this device's Secure
+// Enclave can use.
 
 import CryptoKit
 import Foundation
@@ -55,6 +59,146 @@ public func certval_sf_mldsa_verify(
             return -1
         }
         return valid ? 1 : 0
+    } catch {
+        return -1
+    }
+}
+
+/// Copies `data` into `out`, whose capacity is `capacity`, and its length into `outLen`.
+private func copyOut(
+    _ data: Data, _ out: UnsafeMutablePointer<UInt8>, _ capacity: Int,
+    _ outLen: UnsafeMutablePointer<Int>
+) -> Bool {
+    guard data.count <= capacity else {
+        return false
+    }
+    data.copyBytes(to: out, count: data.count)
+    outLen.pointee = data.count
+    return true
+}
+
+/// Signs `message` with pure ML-DSA and an empty context string, as a certificate or CMS signature
+/// is made, and writes the signature.
+///
+/// `parameterSet` is 65 or 87. `keyKind` is 0 for a key held in memory, `key` being its 32-octet
+/// seed and `publicKey` the raw public key it must generate, or 1 for a Secure Enclave key, `key`
+/// being its `dataRepresentation` (`publicKey` is then unused).
+///
+/// Returns 1 for a signature, 0 when signing failed, -1 when the key is refused or the parameter
+/// set is not one CryptoKit offers, -2 when the running OS has no ML-DSA, and -3 when the output
+/// buffer is too small.
+@_cdecl("certval_sf_mldsa_sign")
+public func certval_sf_mldsa_sign(
+    _ parameterSet: Int32,
+    _ keyKind: Int32,
+    _ key: UnsafePointer<UInt8>, _ keyLen: Int,
+    _ publicKey: UnsafePointer<UInt8>, _ publicKeyLen: Int,
+    _ message: UnsafePointer<UInt8>, _ messageLen: Int,
+    _ signatureOut: UnsafeMutablePointer<UInt8>, _ signatureCapacity: Int,
+    _ signatureLen: UnsafeMutablePointer<Int>
+) -> Int32 {
+    guard #available(macOS 26.0, iOS 26.0, *) else {
+        return -2
+    }
+    let keyData = Data(bytes: key, count: keyLen)
+    let publicData = Data(bytes: publicKey, count: publicKeyLen)
+    let messageData = Data(bytes: message, count: messageLen)
+    let signature: Data
+    do {
+        switch (parameterSet, keyKind) {
+        case (65, 0):
+            let privateKey = try MLDSA65.PrivateKey(
+                seedRepresentation: keyData,
+                publicKey: try MLDSA65.PublicKey(rawRepresentation: publicData))
+            signature = try privateKey.signature(for: messageData)
+        case (87, 0):
+            let privateKey = try MLDSA87.PrivateKey(
+                seedRepresentation: keyData,
+                publicKey: try MLDSA87.PublicKey(rawRepresentation: publicData))
+            signature = try privateKey.signature(for: messageData)
+        case (65, 1):
+            signature = try SecureEnclave.MLDSA65.PrivateKey(dataRepresentation: keyData)
+                .signature(for: messageData)
+        case (87, 1):
+            signature = try SecureEnclave.MLDSA87.PrivateKey(dataRepresentation: keyData)
+                .signature(for: messageData)
+        default:
+            return -1
+        }
+    } catch {
+        return 0
+    }
+    return copyOut(signature, signatureOut, signatureCapacity, signatureLen) ? 1 : -3
+}
+
+/// Generates an ML-DSA key in the Secure Enclave, with the default access control (usable after
+/// first unlock, on this device only, without user presence), and writes its
+/// `dataRepresentation` and raw public key.
+///
+/// `parameterSet` is 65 or 87.
+@_cdecl("certval_sf_mldsa_secure_enclave_generate")
+public func certval_sf_mldsa_secure_enclave_generate(
+    _ parameterSet: Int32,
+    _ dataOut: UnsafeMutablePointer<UInt8>, _ dataCapacity: Int,
+    _ dataLen: UnsafeMutablePointer<Int>,
+    _ publicOut: UnsafeMutablePointer<UInt8>, _ publicCapacity: Int,
+    _ publicLen: UnsafeMutablePointer<Int>
+) -> Int32 {
+    guard #available(macOS 26.0, iOS 26.0, *) else {
+        return -2
+    }
+    guard SecureEnclave.isAvailable else {
+        return -1
+    }
+    do {
+        let data: Data
+        let publicKey: Data
+        switch parameterSet {
+        case 65:
+            let key = try SecureEnclave.MLDSA65.PrivateKey()
+            (data, publicKey) = (key.dataRepresentation, key.publicKey.rawRepresentation)
+        case 87:
+            let key = try SecureEnclave.MLDSA87.PrivateKey()
+            (data, publicKey) = (key.dataRepresentation, key.publicKey.rawRepresentation)
+        default:
+            return -1
+        }
+        guard copyOut(data, dataOut, dataCapacity, dataLen),
+            copyOut(publicKey, publicOut, publicCapacity, publicLen)
+        else {
+            return -3
+        }
+        return 1
+    } catch {
+        return 0
+    }
+}
+
+/// Writes the raw public key of the Secure Enclave ML-DSA key whose `dataRepresentation` is `data`.
+@_cdecl("certval_sf_mldsa_secure_enclave_public_key")
+public func certval_sf_mldsa_secure_enclave_public_key(
+    _ parameterSet: Int32,
+    _ data: UnsafePointer<UInt8>, _ dataLength: Int,
+    _ publicOut: UnsafeMutablePointer<UInt8>, _ publicCapacity: Int,
+    _ publicLen: UnsafeMutablePointer<Int>
+) -> Int32 {
+    guard #available(macOS 26.0, iOS 26.0, *) else {
+        return -2
+    }
+    let representation = Data(bytes: data, count: dataLength)
+    do {
+        let publicKey: Data
+        switch parameterSet {
+        case 65:
+            publicKey = try SecureEnclave.MLDSA65.PrivateKey(dataRepresentation: representation)
+                .publicKey.rawRepresentation
+        case 87:
+            publicKey = try SecureEnclave.MLDSA87.PrivateKey(dataRepresentation: representation)
+                .publicKey.rawRepresentation
+        default:
+            return -1
+        }
+        return copyOut(publicKey, publicOut, publicCapacity, publicLen) ? 1 : -3
     } catch {
         return -1
     }

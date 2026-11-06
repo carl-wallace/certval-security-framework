@@ -188,6 +188,7 @@ dependencies = [
  "der",
  "getrandom",
  "log",
+ "ml-dsa",
  "ml-kem",
  "p256",
  "p384",
