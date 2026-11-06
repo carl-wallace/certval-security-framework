@@ -69,8 +69,9 @@ impl SecurityFrameworkCrypto {
         }
     }
 
-    /// Reports whether the device has a Secure Enclave that CryptoKit can use for ML-KEM keys: true
-    /// only when the crate was built with the `cms` and `pqc` features and the device has one.
+    /// Reports whether the device has a Secure Enclave that CryptoKit can use for ML-KEM and ML-DSA
+    /// keys: true only when the crate was built with the `cms` and `pqc` features and the device
+    /// has one.
     pub fn secure_enclave_available() -> bool {
         #[cfg(all(feature = "cms", feature = "pqc"))]
         {

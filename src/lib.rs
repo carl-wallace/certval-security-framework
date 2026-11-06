@@ -58,7 +58,8 @@
 //! ML-DSA at all; those are declined and software answers them. The same feature enables
 //! certval's software ML-DSA and SLH-DSA, so with it on, every post-quantum signature has an
 //! answer. [`SecurityFrameworkCrypto::ml_dsa_available`] reports whether CryptoKit's ML-DSA is
-//! present.
+//! present. With the `cms` feature as well, `CryptoKitSigningKey` signs SignedData with an
+//! ML-DSA-65 or ML-DSA-87 key held in memory or in the Secure Enclave.
 //!
 //! # ML-KEM
 //!
@@ -105,6 +106,6 @@ pub use cms::{
     import_pkcs8, KeychainIdentities, SecurityFrameworkRecipientKey, SecurityFrameworkSigningKey,
 };
 #[cfg(all(target_vendor = "apple", feature = "cms", feature = "pqc"))]
-pub use cryptokit::CryptoKitRecipientKey;
+pub use cryptokit::{CryptoKitRecipientKey, CryptoKitSigningKey};
 #[cfg(target_vendor = "apple")]
 pub use provider::SecurityFrameworkCrypto;

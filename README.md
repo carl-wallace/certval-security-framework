@@ -113,12 +113,20 @@ device offers. A Secure Enclave key whose access control requires user presence 
 decryption. CryptoKit ML-KEM keys are not keychain identities, so `KeychainIdentities` does not find
 them.
 
+With `cms` and `pqc`, `CryptoKitSigningKey` signs with an ML-DSA-65 or ML-DSA-87 key in the same way:
+held in memory (from an RFC 9881 PKCS #8 key in the `seed` or `both` form; `expandedKey` alone is
+refused) or in the Secure Enclave (from its `dataRepresentation`, e.g. one made with CryptoKit's
+`SecureEnclave.MLDSA65.PrivateKey`), with `generate_in_secure_enclave` to make one. Signatures are
+pure ML-DSA with an empty context string, as RFC 9882 requires. Each constructor checks the key
+against the certificate, and the shim is stateless, as for ML-KEM. ML-DSA-44, which CryptoKit does
+not offer, is declined. Like the ML-KEM keys, these are not keychain identities.
+
 | Operation | Coverage |
 |---|---|
 | Content encryption and decryption | AES-128/192/256-CBC, by CommonCrypto; AES-GCM, which CommonCrypto does not offer, is declined |
 | Key transport | RSAES-PKCS1-v1_5, RSAES-OAEP with SHA-1/256/384/512, by `SecKeyCreateEncryptedData` and `SecKeyCreateDecryptedData` |
 | Key agreement | ephemeral-static ECDH on P-256, P-384 and P-521 with the X9.63 KDF (SHA-256/384/512), by `SecKeyCopyKeyExchangeResult`, then CommonCrypto's AES key wrap |
-| Signing | RSA PKCS #1 v1.5 and RSASSA-PSS, and ECDSA, by `SecKeyCreateSignature` |
+| Signing | RSA PKCS #1 v1.5 and RSASSA-PSS, and ECDSA, by `SecKeyCreateSignature`; ML-DSA-65 and ML-DSA-87, by CryptoKit on macOS and iOS 26 and later, with `pqc`; ML-DSA-44 is declined |
 | KEM | ML-KEM-768 and ML-KEM-1024 with HKDF-SHA256/384/512 (RFC 9629), by CryptoKit on macOS and iOS 26 and later, with `pqc`; ML-KEM-512, which CryptoKit does not offer, is declined, and without `pqc` or on an older OS, every KEM |
 
 Security.framework performs ECDH and the X9.63 KDF in one call, so the shared secret never leaves
@@ -159,8 +167,12 @@ ML-DSA collections a software verdict to compare against.
 
 With `cms` and `pqc`, the CMS tests also cross ML-KEM-768 and ML-KEM-1024 with software in both
 directions, for every KDF and wrap, with keys held in memory and, where the device has a Secure
-Enclave, keys generated there for the test. A process that cannot reach the Secure Enclave (e.g. one
-in a restrictive sandbox) reports that test as skipped.
+Enclave, keys generated there for the test. They also sign with ML-DSA-65 and ML-DSA-87 keys held as
+seeds and, where the device has a Secure Enclave, generated there, and verify each signature with
+software and with this provider alone. A process that cannot reach the Secure Enclave (e.g. one in a
+restrictive sandbox), for which CryptoKit's
+[`SecureEnclave.isAvailable`](https://developer.apple.com/documentation/cryptokit/secureenclave/isavailable)
+is false, reports those tests as skipped when they are run with `--nocapture`.
 
 ## Status
 
@@ -175,7 +187,8 @@ not for this crate.
 
 With the `cms` feature, on macOS 26.6, every CMS test passes, crossed with certval-cms's software in
 both directions, and the keychain is searched. With `cms` and `pqc`, on macOS 26.6.2 (Apple
-silicon), the ML-KEM tests pass for keys in memory and in the Secure Enclave.
+silicon), the ML-KEM decryption and ML-DSA signing tests pass for keys in memory and in the Secure
+Enclave.
 
 certval-cms is not on crates.io yet, so `Cargo.toml`'s `[patch.crates-io]` takes it from a
 neighboring checkout (`../certval-cms`), and CI checks it out there. Both go when it publishes, and
