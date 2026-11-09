@@ -77,6 +77,7 @@
 //! SHA-224, SHA-256, SHA-384 and SHA-512. The message interface hashes inside Security.framework
 //! too: `SecKeyVerifySignature` hashes the message itself with a `...Message...` algorithm.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
