@@ -201,7 +201,10 @@ public func certval_sf_mlkem_decapsulate(
     guard #available(macOS 26.0, iOS 26.0, *) else {
         return -2
     }
-    let keyData = Data(bytes: key, count: keyLen)
+    // A seed is read in place from the caller's buffer, which the caller zeroizes; a copy into
+    // Data would be freed without being wiped. A Secure Enclave key's data representation is
+    // the enclave's wrapped form, not the key, and is copied.
+    let seed = UnsafeRawBufferPointer(start: key, count: keyLen)
     let publicData = Data(bytes: publicKey, count: publicKeyLen)
     let ciphertextData = Data(bytes: ciphertext, count: ciphertextLen)
     let infoData = Data(bytes: info, count: infoLen)
@@ -210,20 +213,22 @@ public func certval_sf_mlkem_decapsulate(
         switch (parameterSet, keyKind) {
         case (768, 0):
             let key = try MLKEM768.PrivateKey(
-                seedRepresentation: keyData,
+                seedRepresentation: seed,
                 publicKey: try MLKEM768.PublicKey(rawRepresentation: publicData))
             secret = try key.decapsulate(ciphertextData)
         case (1024, 0):
             let key = try MLKEM1024.PrivateKey(
-                seedRepresentation: keyData,
+                seedRepresentation: seed,
                 publicKey: try MLKEM1024.PublicKey(rawRepresentation: publicData))
             secret = try key.decapsulate(ciphertextData)
         case (768, 1):
-            secret = try SecureEnclave.MLKEM768.PrivateKey(dataRepresentation: keyData)
-                .decapsulate(ciphertextData)
+            secret = try SecureEnclave.MLKEM768.PrivateKey(
+                dataRepresentation: Data(bytes: key, count: keyLen)
+            ).decapsulate(ciphertextData)
         case (1024, 1):
-            secret = try SecureEnclave.MLKEM1024.PrivateKey(dataRepresentation: keyData)
-                .decapsulate(ciphertextData)
+            secret = try SecureEnclave.MLKEM1024.PrivateKey(
+                dataRepresentation: Data(bytes: key, count: keyLen)
+            ).decapsulate(ciphertextData)
         default:
             return -1
         }

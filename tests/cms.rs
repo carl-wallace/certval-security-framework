@@ -220,7 +220,7 @@ impl Key {
 fn envelop<'e>(
     env: &'e CmsEnvironment,
     alg: ContentEncryptionAlgorithm,
-    recipient: impl cms::builder::RecipientInfoBuilder<Rng = Rng> + 'e,
+    recipient: impl certval_cms::RecipientInfoBuilder<Rng = Rng> + 'e,
 ) -> ContentInfo {
     EnvelopedDataBuilder::new(MESSAGE, alg)
         .unwrap()
@@ -332,6 +332,35 @@ fn key_agreement_on_p384() {
 #[test]
 fn key_agreement_on_p521() {
     key_agreement(ec_key!(p521, 521), "P-521");
+}
+
+/// CommonCrypto's own unpadding strips a trailing count without checking the padding octets or the
+/// input's alignment, so the provider checks both: a last block whose padding is corrupted, a
+/// ciphertext short of a block boundary and an empty one each fail to decrypt, as in software.
+#[test]
+fn malformed_cbc_ciphertext_fails_decryption() {
+    let platform = security_framework();
+    let out = platform
+        .encrypt_content(ContentEncryptionAlgorithm::Aes256Cbc, MESSAGE, None)
+        .unwrap();
+    let decrypt = |ciphertext: &[u8]| {
+        platform.decrypt_content(&out.algorithm, &out.key, ciphertext, None, None)
+    };
+    assert_eq!(decrypt(&out.ciphertext).unwrap().as_slice(), MESSAGE);
+
+    // In CBC, an octet of one ciphertext block is XORed into the plaintext of the next, so
+    // flipping the padding count's bits in the block before the last turns the count to zero.
+    let count = 16 - MESSAGE.len() % 16;
+    let mut corrupted = out.ciphertext.clone();
+    let last = corrupted.len() - 1;
+    corrupted[last - 16] ^= count as u8;
+    assert!(matches!(decrypt(&corrupted), Err(Error::Crypto(_))));
+
+    assert!(matches!(
+        decrypt(&out.ciphertext[..last]),
+        Err(Error::Crypto(_))
+    ));
+    assert!(matches!(decrypt(&[]), Err(Error::Crypto(_))));
 }
 
 #[test]
