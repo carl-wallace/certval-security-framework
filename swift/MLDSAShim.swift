@@ -100,7 +100,10 @@ public func certval_sf_mldsa_sign(
     guard #available(macOS 26.0, iOS 26.0, *) else {
         return -2
     }
-    let keyData = Data(bytes: key, count: keyLen)
+    // A seed is read in place from the caller's buffer, which the caller zeroizes; a copy into
+    // Data would be freed without being wiped. A Secure Enclave key's data representation is
+    // the enclave's wrapped form, not the key, and is copied.
+    let seed = UnsafeRawBufferPointer(start: key, count: keyLen)
     let publicData = Data(bytes: publicKey, count: publicKeyLen)
     let messageData = Data(bytes: message, count: messageLen)
     let signature: Data
@@ -108,20 +111,22 @@ public func certval_sf_mldsa_sign(
         switch (parameterSet, keyKind) {
         case (65, 0):
             let privateKey = try MLDSA65.PrivateKey(
-                seedRepresentation: keyData,
+                seedRepresentation: seed,
                 publicKey: try MLDSA65.PublicKey(rawRepresentation: publicData))
             signature = try privateKey.signature(for: messageData)
         case (87, 0):
             let privateKey = try MLDSA87.PrivateKey(
-                seedRepresentation: keyData,
+                seedRepresentation: seed,
                 publicKey: try MLDSA87.PublicKey(rawRepresentation: publicData))
             signature = try privateKey.signature(for: messageData)
         case (65, 1):
-            signature = try SecureEnclave.MLDSA65.PrivateKey(dataRepresentation: keyData)
-                .signature(for: messageData)
+            signature = try SecureEnclave.MLDSA65.PrivateKey(
+                dataRepresentation: Data(bytes: key, count: keyLen)
+            ).signature(for: messageData)
         case (87, 1):
-            signature = try SecureEnclave.MLDSA87.PrivateKey(dataRepresentation: keyData)
-                .signature(for: messageData)
+            signature = try SecureEnclave.MLDSA87.PrivateKey(
+                dataRepresentation: Data(bytes: key, count: keyLen)
+            ).signature(for: messageData)
         default:
             return -1
         }
@@ -216,15 +221,16 @@ public func certval_sf_mldsa_seed_public_key(
     guard #available(macOS 26.0, iOS 26.0, *) else {
         return -2
     }
-    let seedData = Data(bytes: seed, count: seedLen)
+    // Read in place, as in signing: a copy into Data would be freed without being wiped.
+    let seed = UnsafeRawBufferPointer(start: seed, count: seedLen)
     do {
         let publicKey: Data
         switch parameterSet {
         case 65:
-            publicKey = try MLDSA65.PrivateKey(seedRepresentation: seedData, publicKey: nil)
+            publicKey = try MLDSA65.PrivateKey(seedRepresentation: seed, publicKey: nil)
                 .publicKey.rawRepresentation
         case 87:
-            publicKey = try MLDSA87.PrivateKey(seedRepresentation: seedData, publicKey: nil)
+            publicKey = try MLDSA87.PrivateKey(seedRepresentation: seed, publicKey: nil)
                 .publicKey.rawRepresentation
         default:
             return -1

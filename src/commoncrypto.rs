@@ -121,8 +121,11 @@ mod cipher {
         Decrypt,
     }
 
-    /// AES-CBC with PKCS #7 padding. `None` if CommonCrypto refuses, which on decryption includes
-    /// malformed padding.
+    /// AES-CBC with PKCS #7 padding, which CommonCrypto adds on encryption and this function
+    /// checks and removes on decryption: CommonCrypto's own unpadding strips a trailing count
+    /// without checking the padding octets or that the input is whole blocks, so it never fails.
+    /// `None` if CommonCrypto refuses or, on decryption, if the input is empty or not whole blocks
+    /// or the padding is malformed.
     pub(crate) fn aes_cbc(
         direction: Direction,
         key: &[u8],
@@ -132,9 +135,14 @@ mod cipher {
         if iv.len() != AES_BLOCK {
             return None;
         }
-        let op = match direction {
-            Direction::Encrypt => K_CC_ENCRYPT,
-            Direction::Decrypt => K_CC_DECRYPT,
+        let (op, options) = match direction {
+            Direction::Encrypt => (K_CC_ENCRYPT, K_CC_OPTION_PKCS7_PADDING),
+            Direction::Decrypt => {
+                if input.is_empty() || !input.len().is_multiple_of(AES_BLOCK) {
+                    return None;
+                }
+                (K_CC_DECRYPT, 0)
+            }
         };
         let mut output = vec![0u8; input.len() + AES_BLOCK];
         let mut moved = 0usize;
@@ -144,7 +152,7 @@ mod cipher {
             CCCrypt(
                 op,
                 K_CC_ALGORITHM_AES,
-                K_CC_OPTION_PKCS7_PADDING,
+                options,
                 key.as_ptr().cast(),
                 key.len(),
                 iv.as_ptr().cast(),
@@ -159,7 +167,25 @@ mod cipher {
             return None;
         }
         output.truncate(moved);
+        if direction == Direction::Decrypt {
+            let unpadded = unpadded_len(&output)?;
+            output.truncate(unpadded);
+        }
         Some(output)
+    }
+
+    /// The length of `padded` without its PKCS #7 padding: the last octet is the count, 1 to the
+    /// block length, and every one of that many trailing octets is the count. `None` otherwise.
+    fn unpadded_len(padded: &[u8]) -> Option<usize> {
+        let count = usize::from(*padded.last()?);
+        if count == 0 || count > AES_BLOCK || count > padded.len() {
+            return None;
+        }
+        let (content, padding) = padded.split_at(padded.len() - count);
+        padding
+            .iter()
+            .all(|&octet| usize::from(octet) == count)
+            .then_some(content.len())
     }
 
     /// Wraps `key` under `kek` with AES key wrap (RFC 3394).
