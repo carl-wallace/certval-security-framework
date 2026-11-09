@@ -136,7 +136,9 @@ the Secure Enclave.
 | KEM | ML-KEM-768 and ML-KEM-1024 with HKDF-SHA256/384/512 (RFC 9629), by CryptoKit on macOS and iOS 26 and later, with `pqc`; ML-KEM-512, which CryptoKit does not offer, is declined, and without `pqc` or on an older OS, every KEM |
 
 Security.framework performs ECDH and the X9.63 KDF in one call, so the shared secret never leaves
-it, in either direction.
+it, in either direction. An originator's ephemeral point in compressed form is refused, where
+software and AWS-LC accept it; RFC 5753 makes compressed points a MAY, and OpenSSL sends
+uncompressed ones.
 
 ## Testing
 

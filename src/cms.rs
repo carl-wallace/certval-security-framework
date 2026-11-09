@@ -459,7 +459,8 @@ impl KeychainIdentities {
         Self::default()
     }
 
-    /// Every identity whose certificate `matches`, as its certificate and private key.
+    /// Every identity whose certificate `matches`, as its certificate and private key. An identity
+    /// whose private key cannot be read is passed over.
     fn find(&self, matches: impl Fn(&Certificate) -> bool) -> Result<Vec<(Certificate, SecKey)>> {
         let results = match ItemSearchOptions::new()
             .class(ItemClass::identity())
@@ -490,9 +491,13 @@ impl KeychainIdentities {
             if !matches(&certificate) {
                 continue;
             }
-            let key = identity
-                .private_key()
-                .map_err(|e| Error::Crypto(format!("reading an identity's private key: {e}")))?;
+            let key = match identity.private_key() {
+                Ok(key) => key,
+                Err(e) => {
+                    debug!("passing over an identity whose private key cannot be read: {e}");
+                    continue;
+                }
+            };
             found.push((certificate, key));
         }
         Ok(found)
