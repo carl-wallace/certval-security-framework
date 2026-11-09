@@ -5,6 +5,8 @@ description = """
 Security.framework crypto provider for certval. Performs certificate signature verification with
 Apple's platform cryptography, so certification path validation on macOS and iOS can use the
 operating system's validated cryptographic module rather than an in-process software implementation.
+With `cms`, certval-cms's content encryption, key transport, key agreement and signing go through
+Security.framework too, and ML-KEM and ML-DSA through CryptoKit.
 """
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/carl-wallace/certval-security-framework"
@@ -39,7 +41,7 @@ log = "0.4.33"
 
 # Under the `cms` feature.
 certval-cms = { version = "0.1.0-rc.1", optional = true }
-cms = { version = "0.3.0-rc.0", optional = true }
+cms = { version = "=0.3.0-rc.1", optional = true }
 pkcs8 = { version = "0.11.0", optional = true }
 sec1 = { version = "0.8.1", default-features = false, optional = true }
 x509-cert = { version = "0.3.0", default-features = false, optional = true }
