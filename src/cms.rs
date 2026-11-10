@@ -146,6 +146,15 @@ fn key_agreement_algorithm(alg: KeyAgreementAlgorithm) -> Result<Algorithm> {
         KeyAgreementAlgorithm::EcdhSha256 => Ok(Algorithm::ECDHKeyExchangeStandardX963SHA256),
         KeyAgreementAlgorithm::EcdhSha384 => Ok(Algorithm::ECDHKeyExchangeStandardX963SHA384),
         KeyAgreementAlgorithm::EcdhSha512 => Ok(Algorithm::ECDHKeyExchangeStandardX963SHA512),
+        KeyAgreementAlgorithm::EcdhCofactorSha256 => {
+            Ok(Algorithm::ECDHKeyExchangeCofactorX963SHA256)
+        }
+        KeyAgreementAlgorithm::EcdhCofactorSha384 => {
+            Ok(Algorithm::ECDHKeyExchangeCofactorX963SHA384)
+        }
+        KeyAgreementAlgorithm::EcdhCofactorSha512 => {
+            Ok(Algorithm::ECDHKeyExchangeCofactorX963SHA512)
+        }
         _ => Err(Error::Unrecognized),
     }
 }
