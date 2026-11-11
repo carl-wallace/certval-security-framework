@@ -173,7 +173,7 @@ impl Key {
         let sec_key = Self::generate(KeyType::rsa(), 2048);
         // Security.framework exports an RSA private key as a PKCS #1 RSAPrivateKey.
         let exported = sec_key.external_representation().unwrap().to_vec();
-        let key = rsa::RsaPrivateKey::from_pkcs1_der(&exported).unwrap();
+        let key = rsa::PrivateKey::from_pkcs1_der(&exported).unwrap();
         let spki = key.to_public_key().to_public_key_der().unwrap();
         Self {
             sec_key,
