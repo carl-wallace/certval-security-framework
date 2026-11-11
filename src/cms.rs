@@ -20,7 +20,7 @@ use certval_cms::{
 };
 use cms::enveloped_data::RecipientIdentifier;
 use const_oid::db::rfc5912::{
-    ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1, SECP_521_R_1,
+    ID_EC_PUBLIC_KEY, ID_RSASSA_PSS, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1, SECP_521_R_1,
 };
 use der::{asn1::Any, Decode, Encode, Tag};
 use log::{debug, trace};
@@ -350,7 +350,8 @@ fn sign_with(
         return Err(Error::Unrecognized);
     };
     let fits = match kind {
-        KeyKind::Rsa | KeyKind::RsaPss => key_alg == RSA_ENCRYPTION,
+        KeyKind::Rsa => key_alg == RSA_ENCRYPTION,
+        KeyKind::RsaPss => key_alg == RSA_ENCRYPTION || key_alg == ID_RSASSA_PSS,
         KeyKind::Ec => key_alg == ID_EC_PUBLIC_KEY,
     };
     if !fits {
