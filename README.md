@@ -93,9 +93,10 @@ With the `cms` feature, `SecurityFrameworkCrypto` also implements
 [certval-cms](https://github.com/carl-wallace/certval-cms)'s content encryption and decryption, key
 transport and key agreement, and Security.framework keys serve as credentials:
 `SecurityFrameworkRecipientKey` decrypts, `SecurityFrameworkSigningKey` signs, and
-`KeychainIdentities` finds both among the keychain's identities: a decryption key by the recipient
-identifier a message contains, and signing keys by signer identifier, email address or subject,
-and `certificates()` lists them. `import_pkcs8` makes both credentials for an RSA or EC key held as
+`KeychainIdentities` finds both among the keychain's identities and those on smart cards
+CryptoTokenKit presents (a CAC or PIV card): a decryption key by the recipient identifier a message
+contains, and signing keys by signer identifier, email address or subject, and `certificates()`
+lists them. `import_pkcs8` makes both credentials for an RSA or EC key held as
 PKCS #8, created in memory and not added to a keychain.
 
 With `cms` and `pqc`, ML-KEM is performed by CryptoKit, through the same Swift shim as ML-DSA:
