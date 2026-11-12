@@ -471,23 +471,18 @@ impl KeychainIdentities {
 
     /// Every identity whose certificate `matches`, as its certificate and private key. An identity
     /// whose private key cannot be read is passed over.
+    ///
+    /// Two searches: the keychains, and the access group CryptoTokenKit presents smart card
+    /// identities in (a CAC or PIV card), which a search without that group does not return. An
+    /// identity both return is listed once. The second search failing leaves the keychain's
+    /// identities, with the failure logged, rather than none.
     fn find(&self, matches: impl Fn(&Certificate) -> bool) -> Result<Vec<(Certificate, SecKey)>> {
-        let results = match ItemSearchOptions::new()
-            .class(ItemClass::identity())
-            .load_refs(true)
-            .limit(Limit::All)
-            .search()
-        {
-            Ok(results) => results,
-            Err(e) => {
-                // errSecItemNotFound: there are no identities at all.
-                if e.code() == -25300 {
-                    return Ok(vec![]);
-                }
-                return Err(Error::Crypto(format!("searching the keychain: {e}")));
-            }
-        };
-        let mut found = vec![];
+        let mut results = search_identities(false)?;
+        match search_identities(true) {
+            Ok(token_results) => results.extend(token_results),
+            Err(e) => debug!("passing over smart card identities: {e}"),
+        }
+        let mut found: Vec<(Certificate, SecKey)> = vec![];
         for result in results {
             let SearchResult::Ref(Reference::Identity(identity)) = result else {
                 continue;
@@ -498,7 +493,7 @@ impl KeychainIdentities {
             let Ok(certificate) = Certificate::from_der(&sec_certificate.to_der()) else {
                 continue;
             };
-            if !matches(&certificate) {
+            if !matches(&certificate) || found.iter().any(|(c, _)| *c == certificate) {
                 continue;
             }
             let key = match identity.private_key() {
@@ -513,11 +508,35 @@ impl KeychainIdentities {
         Ok(found)
     }
 
-    /// The certificate of every identity in the keychains the process can search, i.e. every
-    /// certificate with a private key, for a caller to list or choose among. A credential for one
-    /// is found through either source interface, by its identifier.
+    /// The certificate of every identity in the keychains the process can search and on any smart
+    /// card CryptoTokenKit presents, i.e. every certificate with a private key, for a caller to
+    /// list or choose among. A credential for one is found through either source interface, by its
+    /// identifier.
     pub fn certificates(&self) -> Result<Vec<Certificate>> {
         Ok(self.find(|_| true)?.into_iter().map(|(c, _)| c).collect())
+    }
+}
+
+/// Every identity the keychain search returns, or, with `token`, every identity in the access group
+/// CryptoTokenKit presents smart cards in.
+fn search_identities(token: bool) -> Result<Vec<SearchResult>> {
+    let mut options = ItemSearchOptions::new();
+    options
+        .class(ItemClass::identity())
+        .load_refs(true)
+        .limit(Limit::All);
+    if token {
+        options.access_group_token();
+    }
+    match options.search() {
+        Ok(results) => Ok(results),
+        Err(e) => {
+            // errSecItemNotFound: there are no such identities.
+            if e.code() == -25300 {
+                return Ok(vec![]);
+            }
+            Err(Error::Crypto(format!("searching the keychain: {e}")))
+        }
     }
 }
 
