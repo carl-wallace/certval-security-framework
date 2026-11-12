@@ -93,9 +93,10 @@ With the `cms` feature, `SecurityFrameworkCrypto` also implements
 [certval-cms](https://github.com/carl-wallace/certval-cms)'s content encryption and decryption, key
 transport and key agreement, and Security.framework keys serve as credentials:
 `SecurityFrameworkRecipientKey` decrypts, `SecurityFrameworkSigningKey` signs, and
-`KeychainIdentities` finds both among the keychain's identities: a decryption key by the recipient
-identifier a message contains, and signing keys by signer identifier, email address or subject,
-and `certificates()` lists them. `import_pkcs8` makes both credentials for an RSA or EC key held as
+`KeychainIdentities` finds both among the keychain's identities and those on smart cards
+CryptoTokenKit presents (a CAC or PIV card): a decryption key by the recipient identifier a message
+contains, and signing keys by signer identifier, email address or subject, and `certificates()`
+lists them. `import_pkcs8` makes both credentials for an RSA or EC key held as
 PKCS #8, created in memory and not added to a keychain.
 
 With `cms` and `pqc`, ML-KEM is performed by CryptoKit, through the same Swift shim as ML-DSA:
@@ -202,10 +203,6 @@ With the `cms` feature, on macOS 26.6, every CMS test passes, crossed with certv
 both directions, and the keychain is searched. With `cms` and `pqc`, on macOS 26.6.2 (Apple
 silicon), the ML-KEM decryption and ML-DSA signing tests pass for keys in memory and in the Secure
 Enclave.
-
-certval-cms is not on crates.io yet, so `Cargo.toml`'s `[patch.crates-io]` takes it from a
-neighboring checkout (`../certval-cms`), and CI checks it out there. Both go when it publishes, and
-this crate cannot publish before it does.
 
 certval is consumed from crates.io. A commented `[patch.crates-io]` line in `Cargo.toml` redirects
 the dependency to a local checkout for developing both crates together.

@@ -2,7 +2,7 @@
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), except that
 an increase to the minimum supported Rust version is not treated as a breaking change.
 
-## [0.1.0-rc.1]
+## [0.1.0-rc.1] - 2026-11-12
 
 Initial release. Verifies RSA PKCS #1 v1.5, RSASSA-PSS and ECDSA (P-256/384/521) certificate
 signatures through Security.framework on macOS and iOS, through both of certval's verification
@@ -13,7 +13,8 @@ later, by way of a Swift shim, and enables certval's software ML-DSA and SLH-DSA
 implements certval-cms's AES-CBC content encryption and decryption (CommonCrypto), RSA key transport
 and ECDH key agreement with the X9.63 KDF (Security.framework), with `SecurityFrameworkRecipientKey`
 and `SecurityFrameworkSigningKey` decrypting and signing with Security.framework keys and
-`KeychainIdentities` finding them in the keychain, and listing them with `certificates()`.
+`KeychainIdentities` finding them in the keychain and on smart cards CryptoTokenKit presents (a CAC
+or PIV card), and listing them with `certificates()`.
 `import_pkcs8` makes both credentials for a PKCS #8 RSA or EC key, checked against its certificate.
 With `cms` and `pqc`, ML-KEM-768 and ML-KEM-1024 by CryptoKit: `SecurityFrameworkCrypto` encrypts to
 ML-KEM recipients, and `CryptoKitRecipientKey` decrypts with a key held as a seed or in the Secure
