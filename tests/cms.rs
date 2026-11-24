@@ -6,6 +6,7 @@
 //! `SecurityFrameworkRecipientKey`, and messages this provider builds are decrypted by software.
 //! Every key transport algorithm, and ECDH on P-256, P-384 and P-521 with each KDF hash, wrap and
 //! user keying material, with AES-CBC content; AES-GCM, which CommonCrypto lacks, is declined.
+//! EncryptedData under a given key, both ways.
 //!
 //! Signing: messages a `SecurityFrameworkSigningKey` signs are verified by software, and messages
 //! software signs are verified, and hashed, by this provider alone.
@@ -30,15 +31,17 @@ use std::time::Duration;
 
 use certval::PkiEnvironment;
 use certval_cms::{
-    rsa_pss, CmsEnvironment, ContentEncryptionAlgorithm, DigestAlgorithm, EnvelopedDataBuilder,
-    Error, KeyAgreeRecipient, KeyAgreementAlgorithm, KeyTransRecipient, KeyTransportAlgorithm,
-    KeyWrapAlgorithm, RecipientCredential, RecipientCredentialSource, SignedDataBuilder, Signer,
-    SignerPolicy, SigningCredential, SoftwareRecipientKey, SoftwareSigningKey,
+    content_info, rsa_pss, CmsEnvironment, ContentEncryptionAlgorithm, DigestAlgorithm,
+    EncryptedDataBuilder, Error, KeyAgreeRecipient, KeyAgreementAlgorithm, KeyTransRecipient,
+    KeyTransportAlgorithm, KeyWrapAlgorithm, RecipientCredential, RecipientCredentialSource,
+    SignedDataBuilder, Signer, SignerPolicy, SigningCredential, SoftwareRecipientKey,
+    SoftwareSigningKey,
 };
 use certval_security_framework::{
     import_pkcs8, KeychainIdentities, SecurityFrameworkCrypto, SecurityFrameworkRecipientKey,
     SecurityFrameworkSigningKey,
 };
+use cms::builder::{EnvelopedDataBuilder, RecipientInfoBuilder};
 use cms::{content_info::ContentInfo, enveloped_data::RecipientIdentifier};
 use const_oid::db::rfc5912::ID_CE_SUBJECT_KEY_IDENTIFIER;
 use der::{asn1::OctetString, Decode, Encode};
@@ -220,13 +223,58 @@ impl Key {
 fn envelop<'e>(
     env: &'e CmsEnvironment,
     alg: ContentEncryptionAlgorithm,
-    recipient: impl certval_cms::RecipientInfoBuilder<Rng = Rng> + 'e,
+    recipient: impl RecipientInfoBuilder<Rng = Rng> + 'e,
 ) -> ContentInfo {
-    EnvelopedDataBuilder::new(MESSAGE, alg)
+    let enveloped_data = EnvelopedDataBuilder::new(None, MESSAGE, env.content_encryptor(alg), None)
         .unwrap()
-        .add_recipient(recipient)
-        .build_content_info(env, &mut rng())
-        .unwrap_or_else(|e| panic!("building: {e}"))
+        .add_recipient_info(recipient)
+        .unwrap()
+        .build_with_rng(&mut rng())
+        .unwrap_or_else(|e| panic!("building: {e}"));
+    content_info(const_oid::db::rfc5911::ID_ENVELOPED_DATA, &enveloped_data).unwrap()
+}
+
+/// EncryptedData under a given key, both ways: what CommonCrypto encrypts, software decrypts, and
+/// the reverse, for each CBC key size; GCM is declined.
+#[test]
+fn encrypted_data_under_a_given_key_both_ways() {
+    for alg in [
+        ContentEncryptionAlgorithm::Aes128Cbc,
+        ContentEncryptionAlgorithm::Aes192Cbc,
+        ContentEncryptionAlgorithm::Aes256Cbc,
+    ] {
+        let key: Vec<u8> = (1..=alg.key_len() as u8).collect();
+        for (builder, decrypter, name) in [
+            (security_framework(), software(), "CommonCrypto to software"),
+            (software(), security_framework(), "software to CommonCrypto"),
+        ] {
+            let ci = EncryptedDataBuilder::new(MESSAGE, &key, builder.content_encryptor(alg))
+                .build_content_info(&mut rng())
+                .unwrap_or_else(|e| panic!("{name} {alg:?}: {e}"));
+            let (_, content) = decrypter.decrypt_encrypted_data(&ci, &key).unwrap();
+            assert_eq!(content.as_slice(), MESSAGE, "{name} {alg:?}");
+        }
+    }
+    let env = security_framework();
+    let wrong_length = EncryptedDataBuilder::<Rng>::new(
+        MESSAGE,
+        &[0; 32],
+        env.content_encryptor(ContentEncryptionAlgorithm::Aes128Cbc),
+    )
+    .build(&mut rng());
+    assert!(
+        matches!(wrong_length, Err(Error::InvalidInput(_))),
+        "{wrong_length:?}"
+    );
+    assert!(matches!(
+        env.encrypt_content_with_key(
+            ContentEncryptionAlgorithm::Aes256Gcm,
+            &[0; 32],
+            MESSAGE,
+            None
+        ),
+        Err(Error::Unrecognized)
+    ));
 }
 
 fn assert_decrypts(
@@ -681,10 +729,12 @@ mod cryptokit_ml_kem {
             None,
         )
         .unwrap();
-        let built = EnvelopedDataBuilder::new(MESSAGE, ContentEncryptionAlgorithm::Aes256Cbc)
+        let encryptor = platform.content_encryptor(ContentEncryptionAlgorithm::Aes256Cbc);
+        let built = EnvelopedDataBuilder::new(None, MESSAGE, encryptor, None)
             .unwrap()
-            .add_recipient(r)
-            .build_content_info(&platform, &mut rng());
+            .add_recipient_info(r)
+            .unwrap()
+            .build_with_rng(&mut rng());
         assert!(built.is_err(), "ML-KEM-512 was not declined");
     }
 

@@ -62,6 +62,34 @@ fn cbc(alg: ContentEncryptionAlgorithm) -> Option<ContentEncryptionAlgorithm> {
     }
 }
 
+/// Encrypts `plaintext` under `key` with the CBC algorithm `alg`, the IV from Security.framework's
+/// random number generator.
+fn encrypt(
+    alg: ContentEncryptionAlgorithm,
+    key: Zeroizing<Vec<u8>>,
+    plaintext: &[u8],
+    aad: Option<&[u8]>,
+) -> Result<ContentEncryptionOutput> {
+    if aad.is_some() {
+        return Err(Error::InvalidInput(String::from(
+            "associated data given for an algorithm that does not authenticate",
+        )));
+    }
+    let iv = random(CBC_IV_LEN)?;
+    let ciphertext = aes_cbc(Direction::Encrypt, &key, &iv, plaintext)
+        .ok_or_else(|| Error::Crypto(String::from("content encryption failed")))?;
+    trace!("CommonCrypto encrypted content with {alg:?}");
+    Ok(ContentEncryptionOutput {
+        ciphertext,
+        key,
+        algorithm: AlgorithmIdentifierOwned {
+            oid: alg.oid(),
+            parameters: Some(Any::new(Tag::OctetString, iv.as_slice())?),
+        },
+        tag: None,
+    })
+}
+
 impl EncryptContent for SecurityFrameworkCrypto {
     /// AES-CBC by CommonCrypto, with the key and IV from Security.framework's random number
     /// generator. AES-GCM is declined.
@@ -75,25 +103,29 @@ impl EncryptContent for SecurityFrameworkCrypto {
         let Some(alg) = cbc(alg) else {
             return Err(Error::Unrecognized);
         };
-        if aad.is_some() {
-            return Err(Error::InvalidInput(String::from(
-                "associated data given for an algorithm that does not authenticate",
+        encrypt(alg, random(alg.key_len())?, plaintext, aad)
+    }
+
+    /// As [`encrypt_content`](Self::encrypt_content), under `key`. AES-GCM is declined.
+    fn encrypt_content_with_key(
+        &self,
+        _env: &CmsEnvironment,
+        alg: ContentEncryptionAlgorithm,
+        key: &[u8],
+        plaintext: &[u8],
+        aad: Option<&[u8]>,
+    ) -> Result<ContentEncryptionOutput> {
+        let Some(alg) = cbc(alg) else {
+            return Err(Error::Unrecognized);
+        };
+        if key.len() != alg.key_len() {
+            return Err(Error::InvalidInput(format!(
+                "a key of {} octets for {alg:?}, which takes {}",
+                key.len(),
+                alg.key_len()
             )));
         }
-        let key = random(alg.key_len())?;
-        let iv = random(CBC_IV_LEN)?;
-        let ciphertext = aes_cbc(Direction::Encrypt, &key, &iv, plaintext)
-            .ok_or_else(|| Error::Crypto(String::from("content encryption failed")))?;
-        trace!("CommonCrypto encrypted content with {alg:?}");
-        Ok(ContentEncryptionOutput {
-            ciphertext,
-            key,
-            algorithm: AlgorithmIdentifierOwned {
-                oid: alg.oid(),
-                parameters: Some(Any::new(Tag::OctetString, iv.as_slice())?),
-            },
-            tag: None,
-        })
+        encrypt(alg, Zeroizing::new(key.to_vec()), plaintext, aad)
     }
 }
 
