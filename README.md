@@ -141,6 +141,13 @@ it, in either direction. An originator's ephemeral point in compressed form is r
 software and AWS-LC accept it; RFC 5753 makes compressed points a MAY, and OpenSSL sends
 uncompressed ones.
 
+The same key transport, key agreement and key wrap serve cms's own recipient builders, without a
+`CmsEnvironment`: `SecurityFrameworkKeyEncryptor` is the key encryption
+`KeyTransRecipientInfoBuilder` takes, and `SecurityFrameworkKeyAgreement` and
+`SecurityFrameworkKeyWrap` are the key agreement and key wrap `KeyAgreeRecipientInfoBuilder` takes.
+There, the key-encryption key returns to cms to wrap through `SecurityFrameworkKeyWrap`, as cms's
+key agreement interface defines it.
+
 ## Testing
 
 `cargo test` runs the unit tests and the signature tests with no setup. The signature tests verify
@@ -173,6 +180,10 @@ cargo test --features pqc -- --nocapture
 The assertion in each case is **agreement**, not success, and `--nocapture` prints how many
 verifications the platform answered itself. The `pqc` feature builds the CryptoKit shim and gives the
 ML-DSA collections a software verdict to compare against.
+
+With `cms`, the CMS tests also build key transport and key agreement recipients through cms's own
+recipient builders with this crate's types, for every algorithm, curve, KDF hash and wrap, and
+software decrypts.
 
 With `cms` and `pqc`, the CMS tests also cross ML-KEM-768 and ML-KEM-1024 with software in both
 directions, for every KDF and wrap, with keys held in memory and, where the device has a Secure

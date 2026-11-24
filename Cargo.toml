@@ -28,7 +28,7 @@ default = []
 pqc = ["certval/pqc"]
 # Implements certval-cms's content encryption and decryption, key transport and key agreement, and
 # recipient and signing credentials over Security.framework keys, including keychain identities.
-cms = ["dep:certval-cms", "dep:cms", "dep:pkcs8", "dep:sec1", "dep:x509-cert", "dep:zeroize"]
+cms = ["dep:certval-cms", "dep:cms", "dep:pkcs8", "dep:rsa", "dep:sec1", "dep:x509-cert", "dep:zeroize"]
 
 [dependencies]
 certval = { version = "0.2.0-rc.3", default-features = false }
@@ -41,7 +41,12 @@ log = "0.4.33"
 
 # Under the `cms` feature.
 certval-cms = { version = "0.1.0-rc.1", optional = true }
-cms = { version = "=0.3.0-rc.2", optional = true }
+# cms's ASN.1 types, and its builder traits, which SecurityFrameworkKeyEncryptor,
+# SecurityFrameworkKeyAgreement and SecurityFrameworkKeyWrap implement so that cms's own recipient
+# builders perform their key management through Security.framework; rsa for the
+# RandomizedEncryptor trait cms's key transport builder takes.
+cms = { version = "=0.3.0-rc.2", features = ["builder"], optional = true }
+rsa = { version = "0.10.0", default-features = false, optional = true }
 pkcs8 = { version = "0.11.0", optional = true }
 sec1 = { version = "0.8.1", default-features = false, optional = true }
 x509-cert = { version = "0.3.0", default-features = false, optional = true }

@@ -85,6 +85,8 @@
 mod algorithm;
 #[cfg(all(target_vendor = "apple", feature = "cms"))]
 mod cms;
+#[cfg(all(target_vendor = "apple", feature = "cms"))]
+mod cms_builders;
 #[cfg(target_vendor = "apple")]
 #[allow(unsafe_code)]
 mod commoncrypto;
@@ -106,6 +108,10 @@ mod provider;
 pub use cms::{
     import_pkcs8, import_pkcs8_key, KeychainIdentities, SecurityFrameworkKey,
     SecurityFrameworkRecipientKey, SecurityFrameworkSigningKey,
+};
+#[cfg(all(target_vendor = "apple", feature = "cms"))]
+pub use cms_builders::{
+    SecurityFrameworkKeyAgreement, SecurityFrameworkKeyEncryptor, SecurityFrameworkKeyWrap,
 };
 #[cfg(all(target_vendor = "apple", feature = "cms", feature = "pqc"))]
 pub use cryptokit::{CryptoKitKey, CryptoKitRecipientKey, CryptoKitSigningKey};

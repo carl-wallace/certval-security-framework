@@ -213,18 +213,27 @@ impl EncryptKeyTransport for SecurityFrameworkCrypto {
         spki: &SubjectPublicKeyInfoOwned,
         cek: &[u8],
     ) -> Result<Vec<u8>> {
-        let algorithm = key_transport_algorithm(alg)?;
-        let Some((data, key_type)) = key_data(spki, KeyKind::Rsa) else {
-            return Err(Error::Unrecognized);
-        };
-        let key = create_public_key(data, key_type).ok_or(Error::Unrecognized)?;
-        let encrypted = key.encrypt_data(algorithm, cek).map_err(|e| {
-            debug!("Security.framework declined key transport: {e}");
-            Error::Unrecognized
-        })?;
-        trace!("Security.framework performed key transport with {alg:?}");
-        Ok(encrypted)
+        rsa_encrypt(alg, spki, cek)
     }
+}
+
+/// Encrypts `cek` to the RSA key in `spki` with `alg`, by Security.framework.
+pub(crate) fn rsa_encrypt(
+    alg: KeyTransportAlgorithm,
+    spki: &SubjectPublicKeyInfoOwned,
+    cek: &[u8],
+) -> Result<Vec<u8>> {
+    let algorithm = key_transport_algorithm(alg)?;
+    let Some((data, key_type)) = key_data(spki, KeyKind::Rsa) else {
+        return Err(Error::Unrecognized);
+    };
+    let key = create_public_key(data, key_type).ok_or(Error::Unrecognized)?;
+    let encrypted = key.encrypt_data(algorithm, cek).map_err(|e| {
+        debug!("Security.framework declined key transport: {e}");
+        Error::Unrecognized
+    })?;
+    trace!("Security.framework performed key transport with {alg:?}");
+    Ok(encrypted)
 }
 
 impl EncryptKeyAgreement for SecurityFrameworkCrypto {
@@ -240,39 +249,8 @@ impl EncryptKeyAgreement for SecurityFrameworkCrypto {
         ukm: Option<&[u8]>,
         cek: &[u8],
     ) -> Result<KeyAgreeOutput> {
-        if spki.algorithm.oid != ID_EC_PUBLIC_KEY {
-            return Err(Error::Unrecognized);
-        }
-        let algorithm = key_agreement_algorithm(alg)?;
-        let bits = curve_bits(spki).ok_or(Error::Unrecognized)?;
-        let Some((data, key_type)) = key_data(spki, KeyKind::Ec) else {
-            return Err(Error::Unrecognized);
-        };
-        let recipient = create_public_key(data, key_type).ok_or(Error::Unrecognized)?;
-
-        let mut options = GenerateKeyOptions::default();
-        options
-            .set_key_type(KeyType::ec_sec_prime_random())
-            .set_size_in_bits(bits);
-        let ephemeral = SecKey::new(&options).map_err(|e| {
-            debug!("Security.framework could not generate an ephemeral key: {e}");
-            Error::Unrecognized
-        })?;
-        let ephemeral_public_key = ephemeral
-            .public_key()
-            .and_then(|k| k.external_representation())
-            .ok_or_else(|| Error::Crypto(String::from("no ephemeral public key")))?
-            .to_vec();
-
         let shared_info = ecc_cms_shared_info(wrap, ukm)?;
-        let kek = Zeroizing::new(
-            ephemeral
-                .key_exchange(algorithm, &recipient, wrap.kek_len(), Some(&shared_info))
-                .map_err(|e| {
-                    debug!("Security.framework declined key agreement: {e}");
-                    Error::Unrecognized
-                })?,
-        );
+        let (ephemeral_public_key, kek) = ecdh_x963(alg, spki, &shared_info, wrap.kek_len())?;
         let encrypted_key = aes_key_wrap(&kek, cek)
             .ok_or_else(|| Error::Crypto(String::from("key wrap failed")))?;
         trace!("Security.framework performed key agreement with {alg:?} and {wrap:?}");
@@ -281,6 +259,50 @@ impl EncryptKeyAgreement for SecurityFrameworkCrypto {
             encrypted_key,
         })
     }
+}
+
+/// Ephemeral-static ECDH with the EC key in `spki`, on P-256, P-384 or P-521, and the X9.63 KDF of
+/// `alg` over `shared_info`, by Security.framework in one call: the ephemeral public key, an
+/// uncompressed SEC1 point, and a key-encryption key of `kek_len` octets.
+pub(crate) fn ecdh_x963(
+    alg: KeyAgreementAlgorithm,
+    spki: &SubjectPublicKeyInfoOwned,
+    shared_info: &[u8],
+    kek_len: usize,
+) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)> {
+    if spki.algorithm.oid != ID_EC_PUBLIC_KEY {
+        return Err(Error::Unrecognized);
+    }
+    let algorithm = key_agreement_algorithm(alg)?;
+    let bits = curve_bits(spki).ok_or(Error::Unrecognized)?;
+    let Some((data, key_type)) = key_data(spki, KeyKind::Ec) else {
+        return Err(Error::Unrecognized);
+    };
+    let recipient = create_public_key(data, key_type).ok_or(Error::Unrecognized)?;
+
+    let mut options = GenerateKeyOptions::default();
+    options
+        .set_key_type(KeyType::ec_sec_prime_random())
+        .set_size_in_bits(bits);
+    let ephemeral = SecKey::new(&options).map_err(|e| {
+        debug!("Security.framework could not generate an ephemeral key: {e}");
+        Error::Unrecognized
+    })?;
+    let ephemeral_public_key = ephemeral
+        .public_key()
+        .and_then(|k| k.external_representation())
+        .ok_or_else(|| Error::Crypto(String::from("no ephemeral public key")))?
+        .to_vec();
+
+    let kek = Zeroizing::new(
+        ephemeral
+            .key_exchange(algorithm, &recipient, kek_len, Some(shared_info))
+            .map_err(|e| {
+                debug!("Security.framework declined key agreement: {e}");
+                Error::Unrecognized
+            })?,
+    );
+    Ok((ephemeral_public_key, kek))
 }
 
 /// The algorithm of the key a certificate certifies.

@@ -6,7 +6,9 @@
 //! `SecurityFrameworkRecipientKey`, and messages this provider builds are decrypted by software.
 //! Every key transport algorithm, and ECDH on P-256, P-384 and P-521 with each KDF hash, wrap and
 //! user keying material, with AES-CBC content; AES-GCM, which CommonCrypto lacks, is declined.
-//! EncryptedData under a given key, both ways.
+//! EncryptedData under a given key, both ways. Key transport and key agreement also go through cms's
+//! own recipient builders, with this crate's key encryptor, key agreement and key wrap, and software
+//! decrypts.
 //!
 //! Signing: messages a `SecurityFrameworkSigningKey` signs are verified by software, and messages
 //! software signs are verified, and hashed, by this provider alone.
@@ -41,7 +43,13 @@ use certval_security_framework::{
     import_pkcs8, KeychainIdentities, SecurityFrameworkCrypto, SecurityFrameworkRecipientKey,
     SecurityFrameworkSigningKey,
 };
-use cms::builder::{EnvelopedDataBuilder, RecipientInfoBuilder};
+use certval_security_framework::{
+    SecurityFrameworkKeyAgreement, SecurityFrameworkKeyEncryptor, SecurityFrameworkKeyWrap,
+};
+use cms::builder::{
+    EnvelopedDataBuilder, KeyAgreeRecipientInfoBuilder, KeyTransRecipientInfoBuilder,
+    RecipientInfoBuilder,
+};
 use cms::{content_info::ContentInfo, enveloped_data::RecipientIdentifier};
 use const_oid::db::rfc5912::ID_CE_SUBJECT_KEY_IDENTIFIER;
 use der::{asn1::OctetString, Decode, Encode};
@@ -367,6 +375,98 @@ fn key_agreement(key: Key, curve: &str) {
                 );
             }
         }
+    }
+}
+
+/// The key agreement recipient identifier for `cert`.
+fn key_agree_rid(cert: &Certificate) -> cms::enveloped_data::KeyAgreeRecipientIdentifier {
+    use cms::enveloped_data::{KeyAgreeRecipientIdentifier, RecipientIdentifier};
+    match certval_cms::recipient_identifier(cert).unwrap() {
+        RecipientIdentifier::IssuerAndSerialNumber(iasn) => {
+            KeyAgreeRecipientIdentifier::IssuerAndSerialNumber(iasn)
+        }
+        RecipientIdentifier::SubjectKeyIdentifier(skid) => {
+            KeyAgreeRecipientIdentifier::RKeyId(cms::enveloped_data::RecipientKeyIdentifier {
+                subject_key_identifier: skid,
+                date: None,
+                other: None,
+            })
+        }
+    }
+}
+
+/// Key agreement through cms's own `KeyAgreeRecipientInfoBuilder`, with a
+/// `SecurityFrameworkKeyAgreement` and a `SecurityFrameworkKeyWrap`, for each scheme, wrap and user
+/// keying material; software decrypts.
+fn key_agreement_through_cms_builder(key: Key, curve: &str) {
+    let (software, platform) = (software(), security_framework());
+    let (_, software_key) = key.recipient_credentials();
+    for alg in [
+        KeyAgreementAlgorithm::EcdhSha256,
+        KeyAgreementAlgorithm::EcdhSha384,
+        KeyAgreementAlgorithm::EcdhSha512,
+        KeyAgreementAlgorithm::EcdhCofactorSha256,
+        KeyAgreementAlgorithm::EcdhCofactorSha384,
+        KeyAgreementAlgorithm::EcdhCofactorSha512,
+    ] {
+        for wrap in WRAPS {
+            for ukm in [None, Some(b"user keying material".to_vec())] {
+                let name = format!("cms builder {curve} {alg:?} {wrap:?} ukm={}", ukm.is_some());
+                let r = KeyAgreeRecipientInfoBuilder::new(
+                    ukm.map(|ukm| der::asn1::OctetString::new(ukm).unwrap()),
+                    key_agree_rid(&key.cert),
+                    SecurityFrameworkKeyAgreement::from_certificate(&key.cert, alg),
+                    SecurityFrameworkKeyWrap::new(wrap),
+                )
+                .unwrap();
+                let ci = envelop(&platform, ContentEncryptionAlgorithm::Aes128Cbc, r);
+                assert_decrypts(&software, &ci, &software_key, &name);
+            }
+        }
+    }
+}
+
+#[test]
+fn key_agreement_through_cms_builder_on_p256() {
+    key_agreement_through_cms_builder(ec_key!(p256, 256), "P-256");
+}
+
+#[test]
+fn key_agreement_through_cms_builder_on_p384() {
+    key_agreement_through_cms_builder(ec_key!(p384, 384), "P-384");
+}
+
+#[test]
+fn key_agreement_through_cms_builder_on_p521() {
+    key_agreement_through_cms_builder(ec_key!(p521, 521), "P-521");
+}
+
+/// Key transport through cms's own `KeyTransRecipientInfoBuilder` with a
+/// `SecurityFrameworkKeyEncryptor`, for each algorithm; software decrypts.
+#[test]
+fn key_transport_through_cms_builder() {
+    let (software, platform) = (software(), security_framework());
+    let key = Key::rsa();
+    let (_, software_key) = key.recipient_credentials();
+    for alg in [
+        KeyTransportAlgorithm::RsaPkcs1v15,
+        KeyTransportAlgorithm::RsaOaepSha1,
+        KeyTransportAlgorithm::RsaOaepSha256,
+        KeyTransportAlgorithm::RsaOaepSha384,
+        KeyTransportAlgorithm::RsaOaepSha512,
+    ] {
+        let r = KeyTransRecipientInfoBuilder::new(
+            certval_cms::recipient_identifier(&key.cert).unwrap(),
+            SecurityFrameworkKeyEncryptor::from_certificate(&key.cert, alg),
+        )
+        .unwrap();
+        let ci = envelop(&platform, ContentEncryptionAlgorithm::Aes128Cbc, r);
+        assert_decrypts(
+            &software,
+            &ci,
+            &software_key,
+            &format!("cms builder {alg:?}"),
+        );
     }
 }
 

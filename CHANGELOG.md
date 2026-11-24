@@ -8,6 +8,10 @@ an increase to the minimum supported Rust version is not treated as a breaking c
 - With `cms`, `SecurityFrameworkCrypto` implements certval-cms's
   `EncryptContent::encrypt_content_with_key` for AES-CBC, so EncryptedData under a given key is
   encrypted through CommonCrypto.
+- With `cms`, `SecurityFrameworkKeyEncryptor`, `SecurityFrameworkKeyAgreement` and
+  `SecurityFrameworkKeyWrap` implement cms's key encryption, key agreement and key wrap traits, so
+  cms's own `KeyTransRecipientInfoBuilder` and `KeyAgreeRecipientInfoBuilder` perform RSA key
+  transport, ECDH with the X9.63 KDF, and AES key wrap through Security.framework and CommonCrypto.
 
 ## [0.1.0-rc.1] - 2026-11-12
 
